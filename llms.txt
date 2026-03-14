@@ -1,0 +1,12 @@
+# coreason_actuator - AI System Directives
+
+**SYSTEM DIRECTIVE: STRICT ARCHITECTURAL BOUNDARIES ENFORCED**
+
+This repository is governed by rigorous AI-Native development protocols.
+Before analyzing, modifying, or proposing changes to this codebase, you MUST read and adhere to the rules defined in `AGENTS.md`.
+
+* **License:** Prosperity Public License 3.0
+* **Core Tooling:** `uv` (Package Manager), `ruff` (Lint/Format), `mypy` (Strict Typing).
+* **Logging:** Strict enforcement of `loguru`. Standard `print()` or `logging` module usage is mathematically quarantined.
+
+Failure to adhere to the structural bounding defined in `AGENTS.md` will result in CI/CD pipeline rejection.

@@ -1,0 +1,25 @@
+[project]
+site_name = "coreason_actuator"
+site_url = "https://CoReason-AI.github.io/coreason_actuator/"
+repo_url = "https://github.com/CoReason-AI/coreason_actuator"
+docs_dir = "docs"
+site_dir = "site"
+
+[project.theme]
+features = [
+    "navigation.instant",
+    "navigation.tracking",
+    "navigation.tabs",
+    "toc.integrate",
+    "search.suggest",
+    "search.highlight"
+]
+
+[project.plugins.mkdocstrings.handlers.python]
+paths = ["src"]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+docstring_style = "google"
+show_root_heading = true
+show_bases = true
+show_signature_annotations = true

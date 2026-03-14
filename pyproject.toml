@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coreason_actuator"
+dynamic = ["version"]
+description = "The sandboxed physical execution mechanism and Pearlian Do-Operator"
+readme = "README.md"
+requires-python = ">=3.14"
+authors = [
+    { name = "Akshaya M", email = "akshaya.movvar@coreason.ai" },
+]
+dependencies = [
+    "loguru>=0.7.2",
+]
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "ruff>=0.14.14",
+    "pre-commit>=4.5.1",
+    "pytest-cov>=7.0.0",
+    "zensical",
+    "mypy>=1.19.1",
+    "pytest-asyncio",
+    "pytest-benchmark",
+    "deptry",
+    "deepdiff",
+    "hypothesis",
+    "syrupy",
+    "mkdocstrings-python",
+    "types-pyyaml>=6.0.12.20250915",
+    "tzdata>=2025.3",
+    "pytest-xdist>=3.6.1"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coreason_actuator"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[project.urls]
+Homepage = "https://github.com/CoReason-AI/coreason_actuator"
+Repository = "https://github.com/CoReason-AI/coreason_actuator"
+Documentation = "https://github.com/CoReason-AI/coreason_actuator"
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP", "SIM", "RUF", "ARG", "C4", "PT", "TCH", "FA", "PIE", "RET", "PERF", "FURB", "LOG", "N", "A", "S"]
+ignore = ["S101", "TC001", "TC002", "TC003", "UP037"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+addopts = "-n auto --cov=src --cov-report=term-missing --cov-report=html --cov-fail-under=100"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+omit = ["tests/*"]
