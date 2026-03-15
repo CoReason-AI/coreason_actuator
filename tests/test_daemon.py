@@ -15,6 +15,7 @@ import pytest
 from coreason_manifest.spec.ontology import BackpressurePolicy, ToolInvocationEvent, ToolManifest
 
 from coreason_actuator.daemon import ActuatorDaemon
+from coreason_actuator.security import MaskingFunctor
 
 
 class MockBroker:
@@ -426,3 +427,85 @@ async def test_daemon_preemption_non_preemptible_task() -> None:
     assert pushed["type"] == "observation"
     assert pushed["payload"]["execution_status"] == "completed_under_preemption"
     assert pushed["payload"]["null_hash"] is True
+
+
+@pytest.mark.asyncio
+async def test_daemon_execution_success_with_scrubbing() -> None:
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+
+    # Execution strategy returns data with a secret
+    strategy = MockExecutionStrategy(
+        result={
+            "some": "super_secret_token",
+            "nested": {"key": "secret_abc"},
+            "array": ["super_secret_token", 123, {"hidden": "super_secret_token"}],
+            "super_secret_token_key": "val",
+            "other": 456,
+        }
+    )
+    registry = MockRegistry({"test_tool": create_mock_manifest()})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    # Set the masking functor
+    functor = MaskingFunctor(["super_secret_token", "secret_abc"])
+    daemon.set_masking_functor(functor)
+
+    await daemon.run_once()
+
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
+
+    assert len(broker.pushed) == 1
+    pushed = broker.pushed[0]
+    assert pushed["type"] == "observation"
+    assert pushed["payload"]["execution_status"] == "completed"
+
+    result = pushed["payload"]["result"]
+    assert result["some"] == MaskingFunctor.REDACTION_STRING
+    assert result["nested"]["key"] == MaskingFunctor.REDACTION_STRING
+    assert result["array"][0] == MaskingFunctor.REDACTION_STRING
+    assert result["array"][1] == 123
+    assert result["array"][2]["hidden"] == MaskingFunctor.REDACTION_STRING
+    assert result[f"{MaskingFunctor.REDACTION_STRING}_key"] == "val"
+    assert result["other"] == 456
+
+
+@pytest.mark.asyncio
+async def test_daemon_execution_crash_with_scrubbing() -> None:
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+
+    class CrasherStrategy:
+        async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
+            _ = (intent, manifest, sandbox_pid)
+            raise RuntimeError("Failed because of super_secret_token in memory")
+
+    strategy = CrasherStrategy()
+    registry = MockRegistry({"test_tool": create_mock_manifest()})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    functor = MaskingFunctor(["super_secret_token"])
+    daemon.set_masking_functor(functor)
+
+    await daemon.run_once()
+
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
+
+    assert len(broker.pushed) == 1
+    pushed = broker.pushed[0]
+    assert pushed["type"] == "observation"
+    assert pushed["payload"]["execution_status"] == "fatal_crash"
+
+    traceback_str = pushed["payload"]["traceback"]
+    assert "super_secret_token" not in traceback_str
+    assert MaskingFunctor.REDACTION_STRING in traceback_str
