@@ -1,17 +1,14 @@
-import importlib
-import shutil
-from pathlib import Path
+import sys
+from unittest.mock import patch
 
 
 def test_logger_mkdir() -> None:
-    # Remove logs dir if exists to trigger the mkdir
-    logs_dir = Path("logs")
-    if logs_dir.exists():
-        shutil.rmtree(logs_dir)
+    """Test that the logger creates the logs directory if it does not exist."""
+    with patch("pathlib.Path.exists", return_value=False), patch("pathlib.Path.mkdir") as mock_mkdir:
+        if "coreason_actuator.utils.logger" in sys.modules:
+            del sys.modules["coreason_actuator.utils.logger"]
 
-    # Reload module to trigger the if not log_path.exists(): branch
-    import coreason_actuator.utils.logger
+        with patch("loguru.logger.add"), patch("loguru.logger.remove"):
+            import coreason_actuator.utils.logger  # noqa: F401
 
-    importlib.reload(coreason_actuator.utils.logger)
-
-    assert logs_dir.exists()
+            mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
