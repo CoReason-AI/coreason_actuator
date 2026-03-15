@@ -1,0 +1,96 @@
+# Copyright (c) 2026 CoReason, Inc.
+#
+# This software is proprietary and dual-licensed.
+# Licensed under the Prosperity Public License 3.0 (the "License").
+# A copy of the license is available at https://prosperitylicense.com/versions/3.0.0
+# For details, see the LICENSE file.
+# Commercial use beyond a 30-day trial requires a separate license.
+#
+# Source Code: https://github.com/CoReason-AI/coreason_actuator
+
+from typing import Any
+
+from coreason_manifest.spec.ontology import (
+    BoundedJSONRPCIntent,
+    JSONRPCErrorResponseState,
+    JSONRPCErrorState,
+    ToolInvocationEvent,
+)
+from pydantic import ValidationError
+
+from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, CryptographicVerifierProtocol
+
+
+class IPCValidator:
+    """Service for IPC Ingress & Pre-Flight Validation."""
+
+    def __init__(
+        self,
+        registry: ActionSpaceRegistryProtocol,
+        verifier: CryptographicVerifierProtocol,
+    ) -> None:
+        self.registry = registry
+        self.verifier = verifier
+
+    def validate_intent(self, raw_payload: dict[str, Any]) -> ToolInvocationEvent | JSONRPCErrorResponseState:
+        """
+        Parses and strictly validates the raw IPC payload.
+
+        Args:
+            raw_payload: The raw dictionary from the IPC broker.
+
+        Returns:
+            The extracted ToolInvocationEvent if valid, or a JSONRPCErrorResponseState.
+        """
+        try:
+            intent = BoundedJSONRPCIntent.model_validate(raw_payload)
+        except ValidationError as e:
+            return JSONRPCErrorResponseState(
+                jsonrpc="2.0",
+                id=raw_payload.get("id"),
+                error=JSONRPCErrorState(
+                    code=-32700,
+                    message="Parse error: Invalid BoundedJSONRPCIntent payload.",
+                    data={"details": e.errors()},
+                ),
+            )
+
+        # Extract ToolInvocationEvent from params
+        params = intent.params or {}
+        try:
+            tool_invocation = ToolInvocationEvent.model_validate(params)
+        except ValidationError as e:
+            return JSONRPCErrorResponseState(
+                jsonrpc="2.0",
+                id=intent.id,
+                error=JSONRPCErrorState(
+                    code=-32602,
+                    message="Invalid params: Payload does not conform to ToolInvocationEvent bounds.",
+                    data={"details": e.errors()},
+                ),
+            )
+
+        # Mathematical verification of ZK proof and agent attestation
+        if not self.verifier.verify(tool_invocation):
+            return JSONRPCErrorResponseState(
+                jsonrpc="2.0",
+                id=intent.id,
+                error=JSONRPCErrorState(
+                    code=403,
+                    message="Cryptographic verification failed: Invalid zk_proof or agent_attestation.",
+                ),
+            )
+
+        # Topological Registry Verification
+        tool_manifest = self.registry.get_tool(tool_invocation.tool_name)
+        if tool_manifest is None:
+            return JSONRPCErrorResponseState(
+                jsonrpc="2.0",
+                id=intent.id,
+                error=JSONRPCErrorState(
+                    code=-32601,
+                    message=f"Method not found: Tool '{tool_invocation.tool_name}' missing from the registry.",
+                ),
+            )
+
+        return tool_invocation
