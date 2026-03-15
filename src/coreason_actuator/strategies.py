@@ -18,6 +18,7 @@ from coreason_manifest.spec.ontology import MCPServerManifest, ToolInvocationEve
 from coreason_manifest.utils.algebra import verify_ast_safety
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from coreason_actuator.interfaces import AccessibilityTreeProtocol, KinematicBrowserProtocol
 from coreason_actuator.utils.logger import logger
 
 
@@ -173,3 +174,71 @@ class MCPClientStrategy:
 
         # Dispatch the packet via the ephemeral transport connection
         return await self.transport.dispatch(server_manifest, packet)
+
+
+class KinematicExecutionStrategy:
+    """Strategy for translating spatial intent into headless browser automation."""
+
+    def __init__(
+        self,
+        browser: KinematicBrowserProtocol,
+        accessibility_tree: AccessibilityTreeProtocol,
+    ):
+        self.browser = browser
+        self.accessibility_tree = accessibility_tree
+
+    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+        """
+        Executes the kinematic interaction.
+
+        Functionally verifies the presence of the expected_visual_concept at the target coordinates.
+        If the semantic anchor has shifted or is missing, aborts the interaction to prevent destructive UI misfires.
+        """
+        _ = manifest
+        _ = sandbox_pid
+
+        params = intent.parameters or {}
+        x = params.get("x")
+        y = params.get("y")
+        expected_visual_concept = params.get("expected_visual_concept")
+        action = params.get("action")
+
+        if x is None or y is None or expected_visual_concept is None or action is None:
+            raise ValueError(
+                "Kinematic interaction requires 'x', 'y', 'expected_visual_concept', and 'action' parameters."
+            )
+
+        try:
+            x_float = float(x)
+            y_float = float(y)
+        except (ValueError, TypeError) as err:
+            raise ValueError("Coordinates 'x' and 'y' must be valid numbers.") from err
+
+        # Visual Verification
+        logger.info(f"Verifying expected visual concept '{expected_visual_concept}' at ({x_float}, {y_float})")
+        is_verified = await self.accessibility_tree.verify_concept(x_float, y_float, str(expected_visual_concept))
+
+        if not is_verified:
+            msg = (
+                f"Visual verification failed: Expected concept '{expected_visual_concept}' "
+                f"not found at ({x_float}, {y_float}). Aborting interaction."
+            )
+            raise RuntimeError(msg)
+
+        # Execute Action
+        result = None
+        if action == "click":
+            logger.info(f"Executing physical click at ({x_float}, {y_float})")
+            result = await self.browser.click(x_float, y_float)
+        elif action == "type_text":
+            text = params.get("text")
+            if text is None:
+                raise ValueError("Kinematic interaction 'type_text' requires a 'text' parameter.")
+            logger.info(f"Executing physical type_text at ({x_float}, {y_float})")
+            result = await self.browser.type_text(x_float, y_float, str(text))
+        else:
+            raise ValueError(f"Unsupported kinematic action: {action}")
+
+        # Capture Post-Action State (Screenshot/DOM hash could be returned here)
+        # Assuming the caller expects the result or a structured response
+        return result
