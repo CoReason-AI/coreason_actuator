@@ -90,7 +90,7 @@ class MockExecutionStrategy:
         if self.should_crash:
             raise RuntimeError("Mock execution crash")
         # Add a sleep so we have time to cancel in preemption tests
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0.2)
         return self.result
 
 
@@ -120,7 +120,10 @@ async def test_daemon_successful_dispatch() -> None:
     await daemon.run_once()
 
     # Wait for background task to finish
-    await asyncio.sleep(0.05)
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
 
     assert len(broker.pushed) == 1
     assert broker.pushed[0]["type"] == "observation"
@@ -201,7 +204,10 @@ async def test_daemon_execution_success() -> None:
 
     await daemon.run_once()
 
-    await asyncio.sleep(0.05)
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
 
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
@@ -223,7 +229,10 @@ async def test_daemon_execution_crash() -> None:
 
     await daemon.run_once()
 
-    await asyncio.sleep(0.05)
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
 
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
@@ -276,15 +285,21 @@ async def test_daemon_preemption_preemptible_task() -> None:
 
     # Run once to pull the intent
     await daemon.run_once()
-    await asyncio.sleep(0.001)
-    await asyncio.sleep(0.001)
+
+    for _ in range(20):
+        if daemon.active_tasks_count == 1:
+            break
+        await asyncio.sleep(0.01)
     assert daemon.active_tasks_count == 1
 
     # Run again to pull the preemption signal
     await daemon.run_once()
 
     # Wait for background task to resolve its cancellation
-    await asyncio.sleep(0.05)
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
 
     # It should have eradicated it
     assert len(broker.pushed) == 1
@@ -331,14 +346,21 @@ async def test_daemon_preemption_non_preemptible_task() -> None:
 
     # Run once to pull the intent
     await daemon.run_once()
-    await asyncio.sleep(0.001)
+
+    for _ in range(20):
+        if daemon.active_tasks_count == 1:
+            break
+        await asyncio.sleep(0.01)
     assert daemon.active_tasks_count == 1
 
     # Run again to pull the preemption signal
     await daemon.run_once()
 
     # Wait for background task to finish executing its logic since it shielded itself
-    await asyncio.sleep(0.05)
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
 
     # It should have allowed it to complete
     assert len(broker.pushed) == 1

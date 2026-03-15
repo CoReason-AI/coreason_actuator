@@ -119,34 +119,7 @@ class ActuatorDaemon:
             logger.warning(f"No active task found for preemption target: {target_event_id}")
             return
 
-        # Unfortunately, we don't store the manifest directly alongside the task.
-        # But if the task is running, we can just call cancel on it. The task itself
-        # will handle the CancelledError and check manifest.is_preemptible.
-        # However, to avoid cancelling non-preemptible tasks, it's better if we check
-        # the manifest here if we can, but since we don't have it easily accessible,
-        # we will cancel the task, and inside _dispatch_intent, we will evaluate is_preemptible.
-        # Wait, the FRD says "If False: The Actuator is structurally forbidden from killing the process.
-        # It MUST allow the stateful transaction to complete safely..."
-        # If we cancel the task, it raises CancelledError inside the execution, which kills the process.
-        # So we shouldn't cancel if not preemptible.
-        # Let's add target_event_id to preempted_events, and the task will check it later.
-
         self.preempted_events.add(target_event_id)
-        # Inside _dispatch_intent we check if it is preemptible before cancelling,
-        # or we just cancel it here if we know it's preemptible.
-        # Let's just cancel the task. Inside _dispatch_intent, we will catch CancelledError.
-        # Wait, no! If we cancel the task, the transaction won't complete.
-        # We must look up the tool intent to get the manifest.
-        # How do we know which tool the task is running? We don't track it here.
-        # So instead of cancelling right away, let's signal cancellation via an Event,
-        # or we can inspect the task.
-        # Actually, let's just cancel it, but wrap the execution in a shield if it's not preemptible!
-        # That's elegant: in _dispatch_intent, we can check manifest.is_preemptible.
-        # If not, we run the execution with `asyncio.shield()`.
-        # Then `task.cancel()` will cancel the outer task, but the inner execution continues!
-        # But then we'd need to wait for the shielded task to finish to emit the observation.
-        # Let's just track the manifest in a dict `self.active_manifests`?
-        # No, a simpler way: just call `task.cancel()`.
         logger.info(f"Cancelling task for event: {target_event_id}")
         task.cancel()
 
@@ -174,25 +147,11 @@ class ActuatorDaemon:
                 return
 
             # Execute Do-Operator
-            # If not preemptible, we shield it from cancellation so it can complete safely.
-            if not manifest.is_preemptible:
-                # We use asyncio.shield to prevent cancellation from killing the inner task
-                # but if the outer task is cancelled, asyncio.shield raises CancelledError,
-                # while the inner task keeps running. So we'd need to await the inner task separately.
-                # A better approach: we just don't cancel it in _handle_preemption if not preemptible.
-                # Since we changed _handle_preemption to just cancel, let's instead handle the logic there by
-                # checking the registry! We can't because we don't know the tool name in _handle_preemption.
-                pass
-
-            # Since we need to know if it's preemptible to cancel it properly,
-            # let's just run it. We will catch CancelledError below.
-
-            # Note: A real implementation would extract sandbox_pid and handle teardown.
-            sandbox_pid = None
+            # Retrieve sandbox if assigned (e.g., dynamically by earlier orchestration/provisioning).
+            sandbox = self.active_sandboxes.get(intent.event_id)
+            sandbox_pid = sandbox
 
             if not manifest.is_preemptible:
-                # If it's not preemptible, we must shield it so if cancelled, it keeps running
-                # and we can wait for it.
                 inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))
                 try:
                     result = await asyncio.shield(inner_task)
