@@ -478,6 +478,16 @@ async def test_mcp_client_strategy_none_parameters() -> None:
     }
 
 
+class MockTensorStorageProtocol:
+    def __init__(self) -> None:
+        self.streamed_chunks: list[bytes] = []
+
+    async def stream_to_storage(self, data_stream: AsyncIterator[bytes]) -> str:
+        async for chunk in data_stream:
+            self.streamed_chunks.append(chunk)
+        return "ipfs://mock_screenshot_cid_123"
+
+
 class MockKinematicBrowser:
     def __init__(self, should_fail_verification: bool = False) -> None:
         self.clicked_coords: list[tuple[float, float, str, int]] = []
@@ -497,9 +507,14 @@ class MockKinematicBrowser:
         self.typed_texts.append((x, y, text, expected_visual_concept, timeout))
         return "type_success"
 
-    async def get_accessibility_tree_hash(self, x: float, y: float) -> str:
-        _ = (x, y)
-        return "mock_hash"
+    async def get_current_url(self) -> str:
+        return "https://example.com/test"
+
+    async def get_viewport_size(self) -> tuple[int, int]:
+        return (1920, 1080)
+
+    async def get_dom_hash(self) -> str:
+        return "mock_dom_hash_456"
 
     async def capture_viewport_screenshot(self) -> bytes:
         return b"mock_image_bytes"
@@ -508,7 +523,8 @@ class MockKinematicBrowser:
 @pytest.mark.asyncio
 async def test_kinematic_strategy_click_success() -> None:
     browser = MockKinematicBrowser()
-    strategy = KinematicExecutionStrategy(browser)
+    tensor_storage = MockTensorStorageProtocol()
+    strategy = KinematicExecutionStrategy(browser, tensor_storage)
 
     intent = ToolInvocationEvent(
         event_id="test_event_id",
@@ -528,15 +544,24 @@ async def test_kinematic_strategy_click_success() -> None:
 
     result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
 
-    assert result == "click_success"
+    assert result.type == "browser"
+    assert result.current_url == "https://example.com/test"
+    assert result.viewport_size == (1920, 1080)
+    assert result.dom_hash == "mock_dom_hash_456"
+    assert result.accessibility_tree_hash == "[DEPRECATED_BY_ATOMIC_LOCATORS]"
+    assert result.screenshot_cid == "ipfs://mock_screenshot_cid_123"
+
     assert len(browser.clicked_coords) == 1
     assert browser.clicked_coords[0] == (100.0, 200.0, "Submit Button", 200)
+    assert len(tensor_storage.streamed_chunks) == 1
+    assert tensor_storage.streamed_chunks[0] == b"mock_image_bytes"
 
 
 @pytest.mark.asyncio
 async def test_kinematic_strategy_type_text_success() -> None:
     browser = MockKinematicBrowser()
-    strategy = KinematicExecutionStrategy(browser)
+    tensor_storage = MockTensorStorageProtocol()
+    strategy = KinematicExecutionStrategy(browser, tensor_storage)
 
     intent = ToolInvocationEvent(
         event_id="test_event_id",
@@ -556,9 +581,17 @@ async def test_kinematic_strategy_type_text_success() -> None:
 
     result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
 
-    assert result == "type_success"
+    assert result.type == "browser"
+    assert result.current_url == "https://example.com/test"
+    assert result.viewport_size == (1920, 1080)
+    assert result.dom_hash == "mock_dom_hash_456"
+    assert result.accessibility_tree_hash == "[DEPRECATED_BY_ATOMIC_LOCATORS]"
+    assert result.screenshot_cid == "ipfs://mock_screenshot_cid_123"
+
     assert len(browser.typed_texts) == 1
     assert browser.typed_texts[0] == (100.0, 200.0, "testuser", "Username Field", 100)
+    assert len(tensor_storage.streamed_chunks) == 1
+    assert tensor_storage.streamed_chunks[0] == b"mock_image_bytes"
 
 
 @pytest.mark.asyncio

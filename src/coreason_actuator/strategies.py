@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Protocol
 
 from coreason_manifest.spec.ontology import (
+    BrowserDOMState,
     MCPServerManifest,
     ObservationEvent,
     ToolInvocationEvent,
@@ -27,6 +28,7 @@ from coreason_manifest.utils.algebra import verify_ast_safety
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from coreason_actuator.interfaces import IPCBrokerProtocol, KinematicBrowserProtocol
+from coreason_actuator.semantic_extractor import TensorStorageProtocol
 from coreason_actuator.utils.logger import logger
 
 
@@ -187,8 +189,9 @@ class MCPClientStrategy:
 class KinematicExecutionStrategy:
     """Strategy for translating spatial intent into headless browser automation."""
 
-    def __init__(self, browser: KinematicBrowserProtocol):
+    def __init__(self, browser: KinematicBrowserProtocol, tensor_storage: TensorStorageProtocol | None = None):
         self.browser = browser
+        self.tensor_storage = tensor_storage
 
     async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
         """
@@ -222,13 +225,12 @@ class KinematicExecutionStrategy:
         expected_visual_concept_str = str(expected_visual_concept)
 
         # Execute Atomic Action
-        result = None
         if action == "click":
             logger.info(
                 f"Executing atomic physical click at ({x_float}, {y_float}) "
                 f"for concept '{expected_visual_concept_str}' with timeout {timeout_int}ms"
             )
-            result = await self.browser.click(x_float, y_float, expected_visual_concept_str, timeout_int)
+            await self.browser.click(x_float, y_float, expected_visual_concept_str, timeout_int)
         elif action == "type_text":
             text = params.get("text")
             if text is None:
@@ -237,13 +239,37 @@ class KinematicExecutionStrategy:
                 f"Executing atomic physical type_text at ({x_float}, {y_float}) "
                 f"for concept '{expected_visual_concept_str}' with timeout {timeout_int}ms"
             )
-            result = await self.browser.type_text(x_float, y_float, str(text), expected_visual_concept_str, timeout_int)
+            await self.browser.type_text(x_float, y_float, str(text), expected_visual_concept_str, timeout_int)
         else:
             raise ValueError(f"Unsupported kinematic action: {action}")
 
-        # Capture Post-Action State (Screenshot/DOM hash could be returned here)
-        # Assuming the caller expects the result or a structured response
-        return result
+        # Capture Post-Action State (Screenshot/DOM hash)
+        current_url = await self.browser.get_current_url()
+        viewport_size = await self.browser.get_viewport_size()
+        dom_hash = await self.browser.get_dom_hash()
+
+        # Get screenshot bytes
+        img_bytes = await self.browser.capture_viewport_screenshot()
+
+        screenshot_cid = None
+        if self.tensor_storage is not None:
+            from collections.abc import AsyncGenerator
+
+            async def _stream_screenshot() -> AsyncGenerator[bytes]:
+                yield img_bytes
+
+            # Stream directly to cold storage via storage protocol
+            screenshot_cid = await self.tensor_storage.stream_to_storage(_stream_screenshot())
+
+        # The accessibility_tree_hash is populated with a static value indicating it's deprecated/bypassed
+        # in favor of pure Atomic Locators per architectural constraints.
+        return BrowserDOMState(
+            current_url=current_url,
+            viewport_size=viewport_size,
+            dom_hash=dom_hash,
+            accessibility_tree_hash="[DEPRECATED_BY_ATOMIC_LOCATORS]",
+            screenshot_cid=screenshot_cid,
+        )
 
 
 class BackgroundPollingStrategy:

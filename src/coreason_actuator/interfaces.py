@@ -60,8 +60,16 @@ class KinematicBrowserProtocol(Protocol):
         """
         ...
 
-    async def get_accessibility_tree_hash(self, x: float, y: float) -> str:
-        """Returns the accessibility tree hash or semantic representation at the exact coordinate."""
+    async def get_current_url(self) -> str:
+        """Returns the current URL of the active browser session."""
+        ...
+
+    async def get_viewport_size(self) -> tuple[int, int]:
+        """Returns the current viewport dimensions (width, height)."""
+        ...
+
+    async def get_dom_hash(self) -> str:
+        """Returns the SHA-256 hash of the active DOM tree."""
         ...
 
     async def capture_viewport_screenshot(self) -> bytes:
