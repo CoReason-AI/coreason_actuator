@@ -322,7 +322,7 @@ async def test_native_execution_strategy_state_mutation_locking() -> None:
     assert lock_manager.released_locks[0] == expected_lock_key
 
 
-@given(st.text(alphabet=st.characters(blacklist_categories=("Cc", "Cs")), min_size=1))  # type: ignore[misc]
+@given(st.text(alphabet=st.characters(blacklist_categories=("Cc", "Cs")), min_size=1))
 @pytest.mark.asyncio
 async def test_native_execution_strategy_fuzzing_params(text_param: str) -> None:
     # A property-based test to ensure we don't crash on various string inputs,

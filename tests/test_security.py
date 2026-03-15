@@ -78,7 +78,7 @@ def test_masking_functor_invalid_secrets() -> None:
 @given(
     text=st.text(),
     secrets=st.lists(st.text(min_size=1)),
-)  # type: ignore[misc]
+)
 def test_masking_functor_property(text: str, secrets: list[str]) -> None:
     """Property-based testing for the MaskingFunctor."""
     functor = MaskingFunctor(secrets)
@@ -95,7 +95,7 @@ def test_masking_functor_property(text: str, secrets: list[str]) -> None:
     prefix=st.text(),
     secret=st.text(min_size=1),
     suffix=st.text(),
-)  # type: ignore[misc]
+)
 def test_masking_functor_guaranteed_replacement(prefix: str, secret: str, suffix: str) -> None:
     """Property-based testing to guarantee replacement."""
     functor = MaskingFunctor([secret])
