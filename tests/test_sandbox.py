@@ -27,6 +27,7 @@ from coreason_actuator.sandbox import (
     SandboxProviderFactory,
     StatefulSandboxCache,
     WasmSandboxProvider,
+    enforce_sandbox_immutability,
     verify_bytecode_safety,
     verify_network_access,
 )
@@ -91,6 +92,8 @@ async def test_wasm_provider_methods() -> None:
     provider = WasmSandboxProvider()
     state = create_partition_state("wasm32-wasi")
     provider.provision(state)
+    provider.apply_network_egress_rules(["coreason.ai"])
+    provider.enforce_filesystem_immutability(["/dev/shm"])  # noqa: S108
     provider.inject_secrets({"secret": "value"})
     res = provider.execute(b"test")
     assert res == "WASM execution simulated"
@@ -102,6 +105,8 @@ async def test_riscv_provider_methods() -> None:
     provider = RiscvZkvmSandboxProvider()
     state = create_partition_state("riscv32-zkvm")
     provider.provision(state)
+    provider.apply_network_egress_rules(["coreason.ai"])
+    provider.enforce_filesystem_immutability(["/dev/shm"])  # noqa: S108
     provider.inject_secrets({"secret": "value"})
     res = provider.execute(b"test")
     assert res == "RISC-V execution simulated"
@@ -113,6 +118,8 @@ async def test_bpf_provider_methods() -> None:
     provider = BpfSandboxProvider()
     state = create_partition_state("bpf")
     provider.provision(state)
+    provider.apply_network_egress_rules(["coreason.ai"])
+    provider.enforce_filesystem_immutability(["/dev/shm"])  # noqa: S108
     provider.inject_secrets({"secret": "value"})
     res = provider.execute(b"test")
     assert res == "BPF execution simulated"
@@ -254,6 +261,42 @@ def test_verify_network_access_both_true() -> None:
     assert verify_network_access(manifest, partition_state) is True
 
 
+def test_verify_network_access_with_provider_rules_applied() -> None:
+    manifest = create_tool_manifest(network_access=True)
+    # Give the manifest some allowed domains
+    object.__setattr__(manifest.permissions, "allowed_domains", ["coreason.ai", "example.com"])
+
+    partition_state = create_partition_state("wasm32-wasi")
+    object.__setattr__(partition_state, "allow_network_egress", True)
+
+    class MockProvider:
+        def __init__(self) -> None:
+            self.applied_domains: list[str] = []
+
+        def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
+            pass
+
+        def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
+            self.applied_domains = allowed_domains
+
+        def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
+            pass
+
+        def inject_secrets(self, secrets: dict[str, str]) -> None:
+            pass
+
+        def execute(self, bytecode: bytes) -> Any:
+            pass
+
+        async def teardown(self, force: bool = False) -> None:
+            pass
+
+    provider = MockProvider()
+
+    assert verify_network_access(manifest, partition_state, provider) is True
+    assert provider.applied_domains == ["coreason.ai", "example.com"]
+
+
 def test_verify_network_access_both_false() -> None:
     manifest = create_tool_manifest(network_access=False)
     partition_state = create_partition_state("wasm32-wasi")
@@ -277,3 +320,68 @@ def test_verify_network_access_conflict_raises() -> None:
 
     with pytest.raises(PermissionError, match="Dual-Evaluation Permission Boundary conflict"):
         verify_network_access(manifest, partition_state)
+
+
+def test_enforce_sandbox_immutability() -> None:
+    manifest = create_tool_manifest(network_access=False)
+
+    class MockProvider:
+        def __init__(self) -> None:
+            self.exemptions: list[str] | None = None
+
+        def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
+            pass
+
+        def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
+            pass
+
+        def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
+            self.exemptions = tmpfs_exemptions
+
+        def inject_secrets(self, secrets: dict[str, str]) -> None:
+            pass
+
+        def execute(self, bytecode: bytes) -> Any:
+            pass
+
+        async def teardown(self, force: bool = False) -> None:
+            pass
+
+    provider = MockProvider()
+
+    enforce_sandbox_immutability(manifest, provider, additional_exemptions=["/extra"])
+
+    assert provider.exemptions == ["/dev/shm", "/run/secrets", "/extra"]  # noqa: S108
+
+
+def test_enforce_sandbox_immutability_not_forbidden() -> None:
+    manifest = create_tool_manifest(network_access=False)
+    object.__setattr__(manifest.permissions, "file_system_mutation_forbidden", False)
+
+    class MockProvider:
+        def __init__(self) -> None:
+            self.exemptions: list[str] | None = None
+
+        def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
+            pass
+
+        def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
+            pass
+
+        def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
+            self.exemptions = tmpfs_exemptions
+
+        def inject_secrets(self, secrets: dict[str, str]) -> None:
+            pass
+
+        def execute(self, bytecode: bytes) -> Any:
+            pass
+
+        async def teardown(self, force: bool = False) -> None:
+            pass
+
+    provider = MockProvider()
+
+    enforce_sandbox_immutability(manifest, provider)
+
+    assert provider.exemptions is None
