@@ -35,8 +35,8 @@ class DistributedLockProtocol(Protocol):
     @asynccontextmanager
     async def acquire(self, lock_key: str) -> AsyncIterator[Any]:
         """Acquires a lock for the given key."""
-        _ = lock_key
-        yield
+        _ = lock_key  # pragma: no cover
+        yield  # pragma: no cover
 
 
 class NativeRegistryProtocol(Protocol):
