@@ -39,3 +39,34 @@ class CryptographicVerifierProtocol(Protocol):
     def verify(self, intent: ToolInvocationEvent) -> bool:
         """Mathematically verifies the zk_proof and agent_attestation."""
         ...
+
+
+class KinematicBrowserProtocol(Protocol):
+    """Protocol abstracting the headless browser kinematic operations."""
+
+    async def click(self, x: float, y: float) -> Any:
+        """Executes a physical click at the given X/Y coordinates."""
+        ...
+
+    async def type_text(self, x: float, y: float, text: str) -> Any:
+        """Executes a physical text typing at the given X/Y coordinates."""
+        ...
+
+    async def get_accessibility_tree_hash(self, x: float, y: float) -> str:
+        """Returns the accessibility tree hash or semantic representation at the exact coordinate."""
+        ...
+
+    async def capture_viewport_screenshot(self) -> bytes:
+        """Captures a rasterized viewport image buffer."""
+        ...
+
+
+class AccessibilityTreeProtocol(Protocol):
+    """Protocol for semantic visual verification before physical interaction."""
+
+    async def verify_concept(self, x: float, y: float, expected_visual_concept: str) -> bool:
+        """
+        Functionally verifies the presence of the expected_visual_concept at the target coordinates.
+        If the semantic anchor has shifted or is missing, returns False.
+        """
+        ...
