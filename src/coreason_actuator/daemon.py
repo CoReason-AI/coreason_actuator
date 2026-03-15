@@ -24,6 +24,7 @@ from coreason_manifest.spec.ontology import (
 
 from coreason_actuator.ingress import IPCValidator
 from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, IPCBrokerProtocol
+from coreason_actuator.sandbox import SandboxProviderProtocol
 from coreason_actuator.strategies import ExecutionStrategyProtocol
 from coreason_actuator.utils.logger import logger
 
@@ -46,6 +47,9 @@ class ActuatorDaemon:
         self.registry = registry
         self.active_tasks_count = 0
         self._is_running = False
+        self.active_tasks: dict[str, asyncio.Task[Any]] = {}
+        self.preempted_events: set[str] = set()
+        self.active_sandboxes: dict[str, SandboxProviderProtocol] = {}
 
     async def start(self) -> None:
         """Starts the main polling loop of the IPC Daemon."""
@@ -67,6 +71,13 @@ class ActuatorDaemon:
             raw_payload = await self.broker.pull()
         except Exception as e:
             logger.error(f"Error pulling from broker: {e}")
+            return
+
+        # Preemption check (BargeInInterruptEvent can come as raw JSON)
+        if isinstance(raw_payload, dict) and raw_payload.get("type") == "barge_in":
+            target_event_id = raw_payload.get("target_event_id")
+            if target_event_id:
+                await self._handle_preemption(str(target_event_id))
             return
 
         # Check backpressure limits
@@ -98,8 +109,21 @@ class ActuatorDaemon:
             await self.broker.push(result.model_dump())
             return
 
-        # Execute the intent
-        await self._dispatch_intent(result, raw_payload.get("id"))
+        # Execute the intent concurrently
+        task = asyncio.create_task(self._dispatch_intent(result, raw_payload.get("id")))
+        self.active_tasks[result.event_id] = task
+
+    async def _handle_preemption(self, target_event_id: str) -> None:
+        """Handles a BargeInInterruptEvent by attempting to cancel the active task."""
+        logger.info(f"Received preemption signal for event: {target_event_id}")
+        task = self.active_tasks.get(target_event_id)
+        if not task:
+            logger.warning(f"No active task found for preemption target: {target_event_id}")
+            return
+
+        self.preempted_events.add(target_event_id)
+        logger.info(f"Cancelling task for event: {target_event_id}")
+        task.cancel()
 
     async def _dispatch_intent(self, intent: ToolInvocationEvent, request_id: Any) -> None:
         """
@@ -125,18 +149,67 @@ class ActuatorDaemon:
                 return
 
             # Execute Do-Operator
-            result = await self.execution_strategy.execute(intent, manifest, sandbox_pid=None)
+            # Retrieve sandbox if assigned (e.g., dynamically by earlier orchestration/provisioning).
+            sandbox = self.active_sandboxes.get(intent.event_id)
+            sandbox_pid = sandbox
+
+            if not manifest.is_preemptible:
+                inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))
+                try:
+                    result = await asyncio.shield(inner_task)
+                except asyncio.CancelledError:
+                    # Outer task was cancelled (barge-in received).
+                    # But since it's not preemptible, we must wait for it to finish!
+                    logger.info(
+                        f"Task for {intent.event_id} was preempted, but is not preemptible. Waiting for completion."
+                    )
+                    result = await inner_task
+                    # We must emit completed_under_preemption
+                    self.preempted_events.add(intent.event_id)
+            else:
+                # Preemptible
+                result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)
 
             # Successful Execution
+            payload = {"execution_status": "completed", "result": result}
+
+            if intent.event_id in self.preempted_events:
+                payload = {"execution_status": "completed_under_preemption", "null_hash": True}
+
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),
                 timestamp=time.time(),
                 type="observation",
-                payload={"execution_status": "completed", "result": result},
+                payload=payload,
                 triggering_invocation_id=intent.event_id,
             )
             logger.info(f"Tool {intent.tool_name} executed successfully.")
             await self.broker.push(observation.model_dump())
+
+        except asyncio.CancelledError:
+            # Task was cancelled and is preemptible
+            logger.info(f"Execution for {intent.event_id} was safely eradicated via preemption.")
+
+            sandbox = self.active_sandboxes.get(intent.event_id)
+            if sandbox:
+                logger.info(f"Invoking explicit asynchronous teardown on sandbox for {intent.event_id}")
+                await sandbox.teardown(force=True)
+            else:
+                logger.warning(f"No active sandbox tracked for {intent.event_id} to teardown")
+
+            observation = ObservationEvent(
+                event_id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                type="observation",
+                # The FRD: If True, eradicate safely. It doesn't explicitly specify the
+                # Observation payload for eradication, but following conventions,
+                # we return a fatal_crash or preempted status.
+                payload={"execution_status": "preempted", "eradicated": True},
+                triggering_invocation_id=intent.event_id,
+            )
+            await self.broker.push(observation.model_dump())
+            raise  # Re-raise CancelledError to properly terminate the task
+
         except Exception:
             # Fatal Crash
             tb = traceback.format_exc()
@@ -151,3 +224,6 @@ class ActuatorDaemon:
             await self.broker.push(observation.model_dump())
         finally:
             self.active_tasks_count -= 1
+            self.active_tasks.pop(intent.event_id, None)
+            self.preempted_events.discard(intent.event_id)
+            self.active_sandboxes.pop(intent.event_id, None)
