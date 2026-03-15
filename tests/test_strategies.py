@@ -19,16 +19,20 @@ import pytest
 from coreason_manifest.spec.ontology import (
     AgentAttestationReceipt,
     ExecutionSLA,
+    MCPCapabilityWhitelistPolicy,
+    MCPServerManifest,
     PermissionBoundaryPolicy,
     SideEffectProfile,
     ToolInvocationEvent,
     ToolManifest,
+    VerifiableCredentialPresentationReceipt,
     ZeroKnowledgeReceipt,
 )
 from hypothesis import given
 from hypothesis import strategies as st
 
 from coreason_actuator.strategies import (
+    MCPClientStrategy,
     NativeExecutionStrategy,
 )
 
@@ -53,6 +57,33 @@ class MockRegistry:
 
     async def get_callable(self, tool_name: str) -> Callable[..., Awaitable[Any]] | None:
         return self.callable_map.get(tool_name)
+
+
+class MockMCPServerRegistry:
+    def __init__(self, server_map: dict[str, MCPServerManifest]):
+        self.server_map = server_map
+
+    async def get_server_manifest(self, tool_name: str) -> MCPServerManifest | None:
+        return self.server_map.get(tool_name)
+
+
+class MockMCPTransport:
+    def __init__(self) -> None:
+        self.dispatched_packets: list[tuple[MCPServerManifest, dict[str, Any]]] = []
+        self.mock_response = "mock_response"
+
+    async def dispatch(self, server_manifest: MCPServerManifest, packet: dict[str, Any]) -> Any:
+        self.dispatched_packets.append((server_manifest, packet))
+        return self.mock_response
+
+
+def create_mock_credential_receipt() -> VerifiableCredentialPresentationReceipt:
+    return VerifiableCredentialPresentationReceipt(
+        presentation_format="jwt_vc",
+        issuer_did="did:coreason:mcp-authority",
+        cryptographic_proof_blob="mock_blob",
+        authorization_claims={"mock_claim": "mock_value"},
+    )
 
 
 def create_mock_attestation() -> AgentAttestationReceipt:
@@ -342,3 +373,105 @@ async def test_native_execution_strategy_ast_safety_allows_plain_strings() -> No
     result = await strategy.execute(intent, manifest, sandbox_pid=None)
     assert result == "success"
     mock_callable.assert_called_once_with(description=plain_string_payload)
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_strategy_success() -> None:
+    server_manifest = MCPServerManifest(
+        server_uri="http://localhost:8000",
+        transport_type="http",
+        binary_hash="mock",
+        capability_whitelist=MCPCapabilityWhitelistPolicy(
+            allowed_tools=["test_tool"], allowed_prompts=[], allowed_resources=[]
+        ),
+        attestation_receipt=create_mock_credential_receipt(),
+    )
+    registry = MockMCPServerRegistry({"test_tool": server_manifest})
+    transport = MockMCPTransport()
+
+    strategy = MCPClientStrategy(registry, transport)
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_123",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"arg1": "value1"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+    assert result == "mock_response"
+    assert len(transport.dispatched_packets) == 1
+
+    dispatched_server_manifest, dispatched_packet = transport.dispatched_packets[0]
+    assert dispatched_server_manifest == server_manifest
+    assert dispatched_packet == {
+        "jsonrpc": "2.0",
+        "id": "test_event_id_123",
+        "method": "test_tool",
+        "params": {"arg1": "value1"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_strategy_missing_tool() -> None:
+    registry = MockMCPServerRegistry({})
+    transport = MockMCPTransport()
+
+    strategy = MCPClientStrategy(registry, transport)
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_123",
+        timestamp=1704067200.0,
+        tool_name="missing_tool",
+        parameters={"arg1": "value1"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    with pytest.raises(ValueError, match="MCPServerManifest not found for tool: missing_tool"):
+        await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+    assert len(transport.dispatched_packets) == 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_strategy_none_parameters() -> None:
+    server_manifest = MCPServerManifest(
+        server_uri="stdio://mock",
+        transport_type="stdio",
+        binary_hash="mock",
+        capability_whitelist=MCPCapabilityWhitelistPolicy(
+            allowed_tools=["test_tool_no_params"], allowed_prompts=[], allowed_resources=[]
+        ),
+        attestation_receipt=create_mock_credential_receipt(),
+    )
+    registry = MockMCPServerRegistry({"test_tool_no_params": server_manifest})
+    transport = MockMCPTransport()
+
+    strategy = MCPClientStrategy(registry, transport)
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_456",
+        timestamp=1704067200.0,
+        tool_name="test_tool_no_params",
+        parameters={},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+    assert result == "mock_response"
+    assert len(transport.dispatched_packets) == 1
+
+    dispatched_server_manifest, dispatched_packet = transport.dispatched_packets[0]
+    assert dispatched_server_manifest == server_manifest
+    assert dispatched_packet == {
+        "jsonrpc": "2.0",
+        "id": "test_event_id_456",
+        "method": "test_tool_no_params",
+        "params": {},
+    }
