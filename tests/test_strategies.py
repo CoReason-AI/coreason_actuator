@@ -1,0 +1,344 @@
+# Copyright (c) 2026 CoReason, Inc.
+#
+# This software is proprietary and dual-licensed.
+# Licensed under the Prosperity Public License 3.0 (the "License").
+# A copy of the license is available at https://prosperitylicense.com/versions/3.0.0
+# For details, see the LICENSE file.
+# Commercial use beyond a 30-day trial requires a separate license.
+#
+# Source Code: https://github.com/CoReason-AI/coreason_actuator
+
+import hashlib
+import json
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from coreason_manifest.spec.ontology import (
+    AgentAttestationReceipt,
+    ExecutionSLA,
+    PermissionBoundaryPolicy,
+    SideEffectProfile,
+    ToolInvocationEvent,
+    ToolManifest,
+    ZeroKnowledgeReceipt,
+)
+from hypothesis import given
+from hypothesis import strategies as st
+
+from coreason_actuator.strategies import (
+    NativeExecutionStrategy,
+)
+
+
+class MockLockManager:
+    def __init__(self) -> None:
+        self.acquired_locks: list[str] = []
+        self.released_locks: list[str] = []
+
+    @asynccontextmanager
+    async def acquire(self, lock_key: str) -> AsyncIterator[Any]:
+        self.acquired_locks.append(lock_key)
+        try:
+            yield self
+        finally:
+            self.released_locks.append(lock_key)
+
+
+class MockRegistry:
+    def __init__(self, callable_map: dict[str, Callable[..., Awaitable[Any]]]):
+        self.callable_map = callable_map
+
+    async def get_callable(self, tool_name: str) -> Callable[..., Awaitable[Any]] | None:
+        return self.callable_map.get(tool_name)
+
+
+def create_mock_attestation() -> AgentAttestationReceipt:
+    valid_hash = "a" * 64
+    return AgentAttestationReceipt(
+        training_lineage_hash=valid_hash,
+        developer_signature="mock",
+        capability_merkle_root=valid_hash,
+        credential_presentations=[],
+    )
+
+
+def create_mock_zk_proof() -> ZeroKnowledgeReceipt:
+    return ZeroKnowledgeReceipt(
+        proof_protocol="zk-SNARK",
+        public_inputs_hash="mock",
+        verifier_key_id="mock",
+        cryptographic_blob="mock",
+        latent_state_commitments={},
+    )
+
+
+def create_mock_manifest(mutates_state: bool = False, is_idempotent: bool = False) -> ToolManifest:
+    side_effects = SideEffectProfile(mutates_state=mutates_state, is_idempotent=is_idempotent)
+    permissions = PermissionBoundaryPolicy(
+        network_access=False, allowed_domains=[], file_system_mutation_forbidden=True, auth_requirements=[]
+    )
+    sla = ExecutionSLA(max_execution_time_ms=1000, max_compute_footprint_mb=128)
+    return ToolManifest(
+        tool_name="test_tool",
+        description="A test tool",
+        input_schema={"type": "object"},
+        side_effects=side_effects,
+        permissions=permissions,
+        sla=sla,
+        is_preemptible=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_success() -> None:
+    mock_callable = AsyncMock(return_value="success")
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"arg1": "safe_value"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+
+    assert result == "success"
+    mock_callable.assert_called_once_with(arg1="safe_value")
+    assert len(lock_manager.acquired_locks) == 0
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_missing_tool() -> None:
+    registry = MockRegistry({})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="missing_tool",
+        parameters={},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    with pytest.raises(ValueError, match="Tool missing_tool not found in native registry"):
+        await strategy.execute(intent, manifest, sandbox_pid=None)
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_ast_safety_failure() -> None:
+    mock_callable = AsyncMock()
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+
+    # This string is valid syntax but will fail verify_ast_safety due to allowed node limits
+    # e.g., using Call or something if not allowed, or Attribute.
+    unsafe_payload = "os.system('echo hacked')"
+
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"code": unsafe_payload},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    with pytest.raises(
+        ValueError,
+        match=r"Kinetic execution bleed detected|Payload is not valid syntax|AST safety verification failed",
+    ):
+        await strategy.execute(intent, manifest, sandbox_pid=None)
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_ast_safety_explicit_false() -> None:
+    mock_callable = AsyncMock()
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"code": "dummy"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr("coreason_actuator.strategies.verify_ast_safety", MagicMock(return_value=False))
+        with pytest.raises(ValueError, match="AST safety verification failed for parameter 'code'"):
+            await strategy.execute(intent, manifest, sandbox_pid=None)
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_ast_safety_success_with_string() -> None:
+    mock_callable = AsyncMock(return_value="success")
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+
+    # This string is valid syntax and allowed AST nodes (just a string representation of list or simple math)
+    safe_payload = "[1, 2, 3]"
+
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"code": safe_payload},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+    assert result == "success"
+    mock_callable.assert_called_once_with(code=safe_payload)
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_idempotency_retry() -> None:
+    # We simulate a failure that succeeds on the second try
+    call_count = 0
+
+    async def side_effect(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        if call_count < 2:
+            raise RuntimeError("Transient network error")
+        return "success_on_retry"
+
+    mock_callable = AsyncMock(side_effect=side_effect)
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"arg1": "safe_value"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest(is_idempotent=True)
+
+    # Note: wait_exponential min=1 means it will sleep for at least 1s.
+    # To avoid slow tests, we would normally patch wait_exponential or retry configuration,
+    # but for simplicity we let it run or patch tenacity's sleep.
+    # Since we can't easily patch decorator arguments after definition,
+    # we'll just mock asyncio.sleep.
+    import tenacity.nap
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(tenacity.nap, "sleep", MagicMock())
+        result = await strategy.execute(intent, manifest, sandbox_pid=None)
+
+    assert result == "success_on_retry"
+    assert mock_callable.call_count == 2
+    assert len(lock_manager.acquired_locks) == 0
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_state_mutation_locking() -> None:
+    mock_callable = AsyncMock(return_value="mutated")
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+
+    params = {"target": "database", "action": "drop"}
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters=params,
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest(mutates_state=True)
+
+    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+
+    assert result == "mutated"
+    mock_callable.assert_called_once_with(**params)
+
+    # Check lock acquisition
+    expected_hash = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
+    expected_lock_key = f"test_tool:{expected_hash}"
+
+    assert len(lock_manager.acquired_locks) == 1
+    assert lock_manager.acquired_locks[0] == expected_lock_key
+    assert len(lock_manager.released_locks) == 1
+    assert lock_manager.released_locks[0] == expected_lock_key
+
+
+@given(st.text(alphabet=st.characters(blacklist_categories=("Cc", "Cs")), min_size=1))  # type: ignore[misc]
+@pytest.mark.asyncio
+async def test_native_execution_strategy_fuzzing_params(text_param: str) -> None:
+    # A property-based test to ensure we don't crash on various string inputs,
+    # assuming verify_ast_safety handles them correctly.
+    # We must mock verify_ast_safety since random strings aren't valid Python code usually
+    # and would otherwise fail.
+    mock_callable = AsyncMock(return_value="success")
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"fuzz": text_param},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    # If the fuzz string is valid Python AST, it might get passed to verify_ast_safety.
+    # To be safe, we just execute and ensure it doesn't crash on standard non-code strings.
+    # If it does happen to be valid syntax that verify_ast_safety rejects, it'll raise.
+    # To avoid flakiness, we patch verify_ast_safety to return True.
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr("coreason_actuator.strategies.verify_ast_safety", MagicMock(return_value=True))
+        result = await strategy.execute(intent, manifest, sandbox_pid=None)
+        assert result == "success"
+        mock_callable.assert_called_once_with(fuzz=text_param)
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_ast_safety_allows_plain_strings() -> None:
+    mock_callable = AsyncMock(return_value="success")
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+
+    plain_string_payload = "This is just a regular string, not code."
+
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"description": plain_string_payload},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+    assert result == "success"
+    mock_callable.assert_called_once_with(description=plain_string_payload)
