@@ -15,6 +15,7 @@ from typing import Any, Protocol
 from coreason_manifest.spec.ontology import (
     EphemeralNamespacePartitionState,
     SecureSubSessionState,
+    ToolManifest,
 )
 
 from coreason_actuator.utils.logger import logger
@@ -170,3 +171,22 @@ def verify_bytecode_safety(bytecode: bytes, authorized_hashes: list[str]) -> boo
             authorized=authorized_hashes,
         )
     return is_safe
+
+
+def verify_network_access(manifest: ToolManifest, partition_state: EphemeralNamespacePartitionState) -> bool:
+    """
+    Evaluates network egress using a defense-in-depth lock.
+    To authorize a network socket, BOTH ToolManifest.permissions.network_access
+    AND the sandbox's EphemeralNamespacePartitionState.allow_network_egress must evaluate to True.
+    A conflict mathematically blocks the execution by raising a PermissionError.
+    """
+    tool_network = manifest.permissions.network_access
+    sandbox_network = partition_state.allow_network_egress
+
+    if tool_network and not sandbox_network:
+        raise PermissionError(
+            "Dual-Evaluation Permission Boundary conflict: "
+            "Tool requests network access, but the active ephemeral partition explicitly denies egress."
+        )
+
+    return bool(tool_network and sandbox_network)
