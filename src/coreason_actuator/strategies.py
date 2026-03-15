@@ -26,7 +26,7 @@ from coreason_manifest.spec.ontology import (
 from coreason_manifest.utils.algebra import verify_ast_safety
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from coreason_actuator.interfaces import AccessibilityTreeProtocol, IPCBrokerProtocol, KinematicBrowserProtocol
+from coreason_actuator.interfaces import IPCBrokerProtocol, KinematicBrowserProtocol
 from coreason_actuator.utils.logger import logger
 
 
@@ -187,20 +187,15 @@ class MCPClientStrategy:
 class KinematicExecutionStrategy:
     """Strategy for translating spatial intent into headless browser automation."""
 
-    def __init__(
-        self,
-        browser: KinematicBrowserProtocol,
-        accessibility_tree: AccessibilityTreeProtocol,
-    ):
+    def __init__(self, browser: KinematicBrowserProtocol):
         self.browser = browser
-        self.accessibility_tree = accessibility_tree
 
     async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
         """
-        Executes the kinematic interaction.
+        Executes the kinematic interaction using purely atomic locators.
 
-        Functionally verifies the presence of the expected_visual_concept at the target coordinates.
-        If the semantic anchor has shifted or is missing, aborts the interaction to prevent destructive UI misfires.
+        Binds the semantic verification of the expected_visual_concept to the physical action
+        in a single, inseparable operation to eliminate Time-Of-Check to Time-Of-Use (TOCTOU) race conditions.
         """
         _ = manifest
         _ = sandbox_pid
@@ -210,6 +205,7 @@ class KinematicExecutionStrategy:
         y = params.get("y")
         expected_visual_concept = params.get("expected_visual_concept")
         action = params.get("action")
+        timeout = params.get("timeout", 100)
 
         if x is None or y is None or expected_visual_concept is None or action is None:
             raise ValueError(
@@ -219,31 +215,29 @@ class KinematicExecutionStrategy:
         try:
             x_float = float(x)
             y_float = float(y)
+            timeout_int = int(timeout)
         except (ValueError, TypeError) as err:
-            raise ValueError("Coordinates 'x' and 'y' must be valid numbers.") from err
+            raise ValueError("Coordinates 'x', 'y' and 'timeout' must be valid numbers.") from err
 
-        # Visual Verification
-        logger.info(f"Verifying expected visual concept '{expected_visual_concept}' at ({x_float}, {y_float})")
-        is_verified = await self.accessibility_tree.verify_concept(x_float, y_float, str(expected_visual_concept))
+        expected_visual_concept_str = str(expected_visual_concept)
 
-        if not is_verified:
-            msg = (
-                f"Visual verification failed: Expected concept '{expected_visual_concept}' "
-                f"not found at ({x_float}, {y_float}). Aborting interaction."
-            )
-            raise RuntimeError(msg)
-
-        # Execute Action
+        # Execute Atomic Action
         result = None
         if action == "click":
-            logger.info(f"Executing physical click at ({x_float}, {y_float})")
-            result = await self.browser.click(x_float, y_float)
+            logger.info(
+                f"Executing atomic physical click at ({x_float}, {y_float}) "
+                f"for concept '{expected_visual_concept_str}' with timeout {timeout_int}ms"
+            )
+            result = await self.browser.click(x_float, y_float, expected_visual_concept_str, timeout_int)
         elif action == "type_text":
             text = params.get("text")
             if text is None:
                 raise ValueError("Kinematic interaction 'type_text' requires a 'text' parameter.")
-            logger.info(f"Executing physical type_text at ({x_float}, {y_float})")
-            result = await self.browser.type_text(x_float, y_float, str(text))
+            logger.info(
+                f"Executing atomic physical type_text at ({x_float}, {y_float}) "
+                f"for concept '{expected_visual_concept_str}' with timeout {timeout_int}ms"
+            )
+            result = await self.browser.type_text(x_float, y_float, str(text), expected_visual_concept_str, timeout_int)
         else:
             raise ValueError(f"Unsupported kinematic action: {action}")
 
