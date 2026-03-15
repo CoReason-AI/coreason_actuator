@@ -695,3 +695,180 @@ async def test_kinematic_strategy_unsupported_action() -> None:
 
     with pytest.raises(ValueError, match="Unsupported kinematic action: drag_and_drop"):
         await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+
+class MockExecutionStrategy:
+    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+        _ = (intent, manifest, sandbox_pid)
+        return "sync_result"
+
+
+class MockIPCBroker:
+    def __init__(self) -> None:
+        self.pushed_messages: list[dict[str, Any]] = []
+
+    async def push(self, message: dict[str, Any]) -> None:
+        self.pushed_messages.append(message)
+
+    async def pull(self) -> dict[str, Any]:
+        return {}
+
+
+@pytest.mark.asyncio
+async def test_background_polling_sync() -> None:
+    from coreason_manifest.spec.ontology import ExecutionSLA
+
+    from coreason_actuator.strategies import BackgroundPollingStrategy
+
+    mock_strategy = MockExecutionStrategy()
+    mock_broker = MockIPCBroker()
+    polling_strategy = BackgroundPollingStrategy(mock_strategy, mock_broker)
+
+    # recreate manifest because it's frozen
+    manifest_data = create_mock_manifest().model_dump()
+    manifest_data["sla"] = ExecutionSLA(max_execution_time_ms=29999, max_compute_footprint_mb=100)
+    manifest = ToolManifest.model_validate(manifest_data)
+
+    intent = ToolInvocationEvent(
+        event_id="test_event_id",
+        timestamp=1704067200.0,
+        tool_name="sync_tool",
+        parameters={},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+
+    result = await polling_strategy.execute(intent, manifest, "mock_pid")
+    assert result == "sync_result"
+    assert len(mock_broker.pushed_messages) == 0
+
+
+@pytest.mark.asyncio
+async def test_background_polling_sync_no_sla() -> None:
+    from coreason_actuator.strategies import BackgroundPollingStrategy
+
+    mock_strategy = MockExecutionStrategy()
+    mock_broker = MockIPCBroker()
+    polling_strategy = BackgroundPollingStrategy(mock_strategy, mock_broker)
+
+    manifest_data = create_mock_manifest().model_dump()
+    manifest_data["sla"] = None
+    manifest = ToolManifest.model_validate(manifest_data)
+
+    intent = ToolInvocationEvent(
+        event_id="test_event_id",
+        timestamp=1704067200.0,
+        tool_name="sync_tool",
+        parameters={},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+
+    result = await polling_strategy.execute(intent, manifest, "mock_pid")
+    assert result == "sync_result"
+    assert len(mock_broker.pushed_messages) == 0
+
+
+class MockExecutionStrategySlow:
+    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+        import asyncio
+
+        _ = (intent, manifest, sandbox_pid)
+        await asyncio.sleep(0.01)
+        return "async_result"
+
+
+class MockExecutionStrategyCrash:
+    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+        import asyncio
+
+        _ = (intent, manifest, sandbox_pid)
+        await asyncio.sleep(0.01)
+        raise RuntimeError("Something went wrong!")
+
+
+@pytest.mark.asyncio
+async def test_background_polling_async() -> None:
+    import asyncio
+
+    from coreason_manifest.spec.ontology import ExecutionSLA
+
+    from coreason_actuator.strategies import BackgroundPollingStrategy
+
+    mock_strategy = MockExecutionStrategySlow()
+    mock_broker = MockIPCBroker()
+    polling_strategy = BackgroundPollingStrategy(mock_strategy, mock_broker)
+
+    manifest_data = create_mock_manifest().model_dump()
+    manifest_data["sla"] = ExecutionSLA(max_execution_time_ms=30000, max_compute_footprint_mb=100)
+    manifest = ToolManifest.model_validate(manifest_data)
+
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_async",
+        timestamp=1704067200.0,
+        tool_name="async_tool",
+        parameters={},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+
+    result = await polling_strategy.execute(intent, manifest, "mock_pid")
+
+    # Check that an immediate ObservationEvent is returned with pending_async_execution
+    assert result.type == "observation"
+    assert result.payload["status"] == "pending_async_execution"
+    assert "job_id" in result.payload
+    assert result.triggering_invocation_id == "test_event_id_async"
+
+    # Wait for the background task to complete
+    await asyncio.sleep(0.05)
+
+    assert len(mock_broker.pushed_messages) == 1
+    pushed_msg = mock_broker.pushed_messages[0]
+    assert pushed_msg["type"] == "observation"
+    assert pushed_msg["payload"]["status"] == "completed"
+    assert pushed_msg["payload"]["job_id"] == result.payload["job_id"]
+    assert pushed_msg["payload"]["result"] == "async_result"
+    assert pushed_msg["triggering_invocation_id"] == "test_event_id_async"
+
+
+@pytest.mark.asyncio
+async def test_background_polling_async_crash() -> None:
+    import asyncio
+
+    from coreason_manifest.spec.ontology import ExecutionSLA
+
+    from coreason_actuator.strategies import BackgroundPollingStrategy
+
+    mock_strategy = MockExecutionStrategyCrash()
+    mock_broker = MockIPCBroker()
+    polling_strategy = BackgroundPollingStrategy(mock_strategy, mock_broker)
+
+    manifest_data = create_mock_manifest().model_dump()
+    manifest_data["sla"] = ExecutionSLA(max_execution_time_ms=30000, max_compute_footprint_mb=100)
+    manifest = ToolManifest.model_validate(manifest_data)
+
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_crash",
+        timestamp=1704067200.0,
+        tool_name="async_tool_crash",
+        parameters={},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+
+    result = await polling_strategy.execute(intent, manifest, "mock_pid")
+
+    assert result.type == "observation"
+    assert result.payload["status"] == "pending_async_execution"
+
+    # Wait for the background task to crash and push the error
+    await asyncio.sleep(0.05)
+
+    assert len(mock_broker.pushed_messages) == 1
+    pushed_msg = mock_broker.pushed_messages[0]
+    assert pushed_msg["type"] == "observation"
+    assert pushed_msg["payload"]["status"] == "fatal_crash"
+    assert pushed_msg["payload"]["error_type"] == "RuntimeError"
+    assert pushed_msg["payload"]["error_message"] == "Something went wrong!"
+    assert pushed_msg["triggering_invocation_id"] == "test_event_id_crash"

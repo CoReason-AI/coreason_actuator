@@ -8,17 +8,25 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
+import asyncio
 import hashlib
 import json
+import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any, Protocol
 
-from coreason_manifest.spec.ontology import MCPServerManifest, ToolInvocationEvent, ToolManifest
+from coreason_manifest.spec.ontology import (
+    MCPServerManifest,
+    ObservationEvent,
+    ToolInvocationEvent,
+    ToolManifest,
+)
 from coreason_manifest.utils.algebra import verify_ast_safety
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from coreason_actuator.interfaces import AccessibilityTreeProtocol, KinematicBrowserProtocol
+from coreason_actuator.interfaces import AccessibilityTreeProtocol, IPCBrokerProtocol, KinematicBrowserProtocol
 from coreason_actuator.utils.logger import logger
 
 
@@ -242,3 +250,80 @@ class KinematicExecutionStrategy:
         # Capture Post-Action State (Screenshot/DOM hash could be returned here)
         # Assuming the caller expects the result or a structured response
         return result
+
+
+class BackgroundPollingStrategy:
+    """
+    Wrapper strategy that executes the underlying execution strategy based on the Hardware SLA Evaluation.
+    If the max execution time < 30,000ms, it executes synchronously.
+    Otherwise, it executes as a background task, immediately yielding a pending ObservationEvent.
+    """
+
+    def __init__(self, execution_strategy: ExecutionStrategyProtocol, broker: IPCBrokerProtocol):
+        self.execution_strategy = execution_strategy
+        self.broker = broker
+
+    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+        sla = manifest.sla
+        max_time_ms = sla.max_execution_time_ms if sla else None
+
+        if max_time_ms is None or max_time_ms < 30000:
+            logger.info(f"Executing tool {intent.tool_name} synchronously (SLA: {max_time_ms}ms)")
+            return await self.execution_strategy.execute(intent, manifest, sandbox_pid)
+
+        logger.info(f"Executing tool {intent.tool_name} asynchronously (SLA: {max_time_ms}ms)")
+        job_id = str(uuid.uuid4())
+
+        # Spawn the background task
+        # In a real environment, this could use a ProcessPoolExecutor.
+        # Here we use asyncio.create_task for the async underlying strategy.
+        task = asyncio.create_task(self._background_execute(intent, manifest, sandbox_pid, job_id))
+
+        # Keep a reference to prevent garbage collection
+        if not hasattr(self, "_background_tasks"):
+            self._background_tasks = set()
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+        # Return a strictly typed ObservationEvent indicating pending execution
+        return ObservationEvent(
+            event_id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            type="observation",
+            payload={"status": "pending_async_execution", "job_id": job_id},
+            triggering_invocation_id=intent.event_id,
+        )
+
+    async def _background_execute(
+        self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any, job_id: str
+    ) -> None:
+        """Executes the task in the background and pushes the final observation to the broker."""
+        try:
+            result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)
+            # Wrap the successful result in an ObservationEvent
+            observation = ObservationEvent(
+                event_id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                type="observation",
+                payload={"status": "completed", "job_id": job_id, "result": result},
+                triggering_invocation_id=intent.event_id,
+            )
+            logger.info(f"Background execution completed for job {job_id}")
+        except Exception as e:
+            # Handle the error and wrap in an ObservationEvent
+            observation = ObservationEvent(
+                event_id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                type="observation",
+                payload={
+                    "status": "fatal_crash",
+                    "job_id": job_id,
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+                triggering_invocation_id=intent.event_id,
+            )
+            logger.error(f"Background execution failed for job {job_id}: {e}")
+
+        # Push the final observation back to the IPC broker
+        await self.broker.push(observation.model_dump())
