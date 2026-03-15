@@ -24,6 +24,7 @@ from coreason_manifest.spec.ontology import (
 
 from coreason_actuator.ingress import IPCValidator
 from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, IPCBrokerProtocol
+from coreason_actuator.sandbox import SandboxProviderProtocol
 from coreason_actuator.strategies import ExecutionStrategyProtocol
 from coreason_actuator.utils.logger import logger
 
@@ -48,6 +49,7 @@ class ActuatorDaemon:
         self._is_running = False
         self.active_tasks: dict[str, asyncio.Task[Any]] = {}
         self.preempted_events: set[str] = set()
+        self.active_sandboxes: dict[str, SandboxProviderProtocol] = {}
 
     async def start(self) -> None:
         """Starts the main polling loop of the IPC Daemon."""
@@ -187,9 +189,13 @@ class ActuatorDaemon:
         except asyncio.CancelledError:
             # Task was cancelled and is preemptible
             logger.info(f"Execution for {intent.event_id} was safely eradicated via preemption.")
-            # We would call sandbox.teardown(force=True) here if we had the sandbox instance.
-            # We assume the provider or caller manages the teardown if sandbox_pid is passed,
-            # or we could explicitly call a teardown method if we tracked sandboxes.
+
+            sandbox = self.active_sandboxes.get(intent.event_id)
+            if sandbox:
+                logger.info(f"Invoking explicit asynchronous teardown on sandbox for {intent.event_id}")
+                await sandbox.teardown(force=True)
+            else:
+                logger.warning(f"No active sandbox tracked for {intent.event_id} to teardown")
 
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),
@@ -220,3 +226,4 @@ class ActuatorDaemon:
             self.active_tasks_count -= 1
             self.active_tasks.pop(intent.event_id, None)
             self.preempted_events.discard(intent.event_id)
+            self.active_sandboxes.pop(intent.event_id, None)

@@ -51,24 +51,30 @@ class MockValidator:
 
         # Just return a dummy event
         # Just return a proper mock event
+        from coreason_manifest.spec.ontology import AgentAttestationReceipt, ZeroKnowledgeReceipt
+
         return ToolInvocationEvent(
             event_id="test_event_123",
             timestamp=12345.6,
             tool_name="test_tool",
             parameters={},
-            zk_proof={
-                "proof_protocol": "zk-SNARK",
-                "public_inputs_hash": "a" * 64,
-                "verifier_key_id": "b",
-                "cryptographic_blob": "c",
-                "latent_state_commitments": {},
-            },
-            agent_attestation={
-                "training_lineage_hash": "a" * 64,
-                "developer_signature": "b",
-                "capability_merkle_root": "c" * 64,
-                "credential_presentations": [],
-            },
+            zk_proof=ZeroKnowledgeReceipt.model_validate(
+                {
+                    "proof_protocol": "zk-SNARK",
+                    "public_inputs_hash": "a" * 64,
+                    "verifier_key_id": "b",
+                    "cryptographic_blob": "c",
+                    "latent_state_commitments": {},
+                }
+            ),
+            agent_attestation=AgentAttestationReceipt.model_validate(
+                {
+                    "training_lineage_hash": "a" * 64,
+                    "developer_signature": "b",
+                    "capability_merkle_root": "c" * 64,
+                    "credential_presentations": [],
+                }
+            ),
         )
 
 
@@ -307,6 +313,58 @@ async def test_daemon_preemption_preemptible_task() -> None:
     assert pushed["type"] == "observation"
     assert pushed["payload"]["execution_status"] == "preempted"
     assert pushed["payload"]["eradicated"] is True
+
+
+@pytest.mark.asyncio
+async def test_daemon_preemption_sandbox_teardown() -> None:
+    broker = MockBroker(
+        [
+            {"jsonrpc": "2.0", "method": "test", "id": "1"},  # Intent
+            {"type": "barge_in", "target_event_id": "test_event_123"},  # Preemption Signal
+        ]
+    )
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy(result={"some": "data"})
+    # Create manifest with is_preemptible=True
+    registry = MockRegistry({"test_tool": create_mock_manifest(is_preemptible=True)})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    # Mock a sandbox for the task
+    class MockSandbox:
+        def __init__(self) -> None:
+            self.teardown_called = False
+            self.force = False
+
+        async def teardown(self, force: bool = False) -> None:
+            self.teardown_called = True
+            self.force = force
+
+    mock_sandbox = MockSandbox()
+
+    # Run once to pull the intent
+    await daemon.run_once()
+
+    # Inject the mock sandbox directly into the active tracking dictionary
+    daemon.active_sandboxes["test_event_123"] = mock_sandbox  # type: ignore
+
+    for _ in range(20):
+        if daemon.active_tasks_count == 1:
+            break
+        await asyncio.sleep(0.01)
+
+    # Run again to pull the preemption signal
+    await daemon.run_once()
+
+    # Wait for background task to resolve its cancellation
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
+
+    assert mock_sandbox.teardown_called is True
+    assert mock_sandbox.force is True
 
 
 @pytest.mark.asyncio
