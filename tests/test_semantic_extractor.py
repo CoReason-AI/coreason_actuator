@@ -1,0 +1,94 @@
+# Copyright (c) 2026 CoReason, Inc.
+#
+# This software is proprietary and dual-licensed.
+# Licensed under the Prosperity Public License 3.0 (the "License").
+# A copy of the license is available at https://prosperitylicense.com/versions/3.0.0
+# For details, see the LICENSE file.
+# Commercial use beyond a 30-day trial requires a separate license.
+#
+# Source Code: https://github.com/CoReason-AI/coreason_actuator
+
+import hashlib
+from collections.abc import AsyncGenerator
+
+import pytest
+from coreason_manifest.spec.ontology import TensorStructuralFormatProfile
+
+from coreason_actuator.semantic_extractor import SemanticExtractor, TensorRouter, TensorStorageProtocol
+
+
+def test_semantic_extractor_no_truncation() -> None:
+    extractor = SemanticExtractor(max_array_length=50)
+    raw_payload = {"status": "success", "data": [1, 2, 3, 4, 5], "metadata": {"key": "value"}}
+
+    truncated = extractor.truncate_payload(raw_payload)
+
+    assert "truncation_metadata" not in truncated
+    assert len(truncated["data"]) == 5
+    assert truncated["status"] == "success"
+
+
+def test_semantic_extractor_with_truncation() -> None:
+    extractor = SemanticExtractor(max_array_length=5)
+    raw_payload = {"status": "success", "data": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "other_data": ["a", "b", "c"]}
+
+    truncated = extractor.truncate_payload(raw_payload)
+
+    assert "truncation_metadata" in truncated
+    assert truncated["truncation_metadata"]["semantic_truncation_applied"] is True
+    assert truncated["truncation_metadata"]["items_omitted"] == 5
+    assert len(truncated["data"]) == 5
+    assert truncated["data"] == [1, 2, 3, 4, 5]
+    assert len(truncated["other_data"]) == 3
+    assert truncated["status"] == "success"
+
+
+def test_semantic_extractor_multiple_arrays() -> None:
+    extractor = SemanticExtractor(max_array_length=2)
+    raw_payload = {"data1": [1, 2, 3, 4], "data2": ["a", "b", "c"]}
+
+    truncated = extractor.truncate_payload(raw_payload)
+
+    assert "truncation_metadata" in truncated
+    assert truncated["truncation_metadata"]["items_omitted"] == 3  # (4-2) + (3-2)
+    assert len(truncated["data1"]) == 2
+    assert len(truncated["data2"]) == 2
+
+
+class MockTensorStorage(TensorStorageProtocol):
+    def __init__(self) -> None:
+        self.received_chunks: list[bytes] = []
+
+    async def stream_to_storage(self, data_stream: AsyncGenerator[bytes]) -> str:
+        async for chunk in data_stream:
+            self.received_chunks.append(chunk)
+        return "s3://mock-bucket/tensor-blob"
+
+
+@pytest.mark.asyncio
+async def test_tensor_router() -> None:
+    storage = MockTensorStorage()
+    router = TensorRouter(storage)
+
+    async def mock_stream() -> AsyncGenerator[bytes]:
+        yield b"chunk1"
+        yield b"chunk2"
+
+    manifest = await router.route_tensor(
+        data_stream=mock_stream(),
+        shape=(2, 2),
+        vram_footprint_bytes=16,
+        structural_type=TensorStructuralFormatProfile.FLOAT32,
+    )
+
+    expected_hash = hashlib.sha256(b"chunk1chunk2").hexdigest()
+
+    assert manifest.merkle_root == expected_hash
+    assert manifest.storage_uri == "s3://mock-bucket/tensor-blob"
+    assert manifest.shape == (2, 2)
+    assert manifest.structural_type == TensorStructuralFormatProfile.FLOAT32
+    assert manifest.vram_footprint_bytes == 16
+
+    assert len(storage.received_chunks) == 2
+    assert storage.received_chunks[0] == b"chunk1"
+    assert storage.received_chunks[1] == b"chunk2"
