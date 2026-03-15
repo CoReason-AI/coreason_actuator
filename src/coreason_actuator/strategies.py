@@ -44,9 +44,10 @@ class DistributedLockProtocol(Protocol):
     """Protocol for acquiring exclusive execution locks."""
 
     @asynccontextmanager
-    async def acquire(self, lock_key: str) -> AsyncIterator[Any]:
+    async def acquire(self, lock_key: str, ttl: int | None = None) -> AsyncIterator[Any]:
         """Acquires a lock for the given key."""
         _ = lock_key  # pragma: no cover
+        _ = ttl  # pragma: no cover
         yield  # pragma: no cover
 
 
@@ -134,9 +135,13 @@ class NativeExecutionStrategy:
         # Acquire exclusive distributed lock
         if mutates_state:
             payload_hash = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
-            lock_key = f"{intent.tool_name}:{payload_hash}"
-            logger.info(f"Acquiring exclusive execution lock for {lock_key}")
-            async with self.lock_manager.acquire(lock_key):
+            # Lock key MUST be formulated using specific cryptographic nonce of execution
+            lock_key = f"lock:{intent.tool_name}:{payload_hash}:{intent.event_id}"
+            # Lock TTL MUST be mathematically bound to ExecutionSLA.max_execution_time_ms
+            ttl = manifest.sla.max_execution_time_ms if manifest.sla else None
+
+            logger.info(f"Acquiring exclusive execution lock for {lock_key} with ttl {ttl}ms")
+            async with self.lock_manager.acquire(lock_key, ttl=ttl):
                 return await _do_execute()
 
         # If is_idempotent == True (and not mutates_state, mutates_state takes precedence)
