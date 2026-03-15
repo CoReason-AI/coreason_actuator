@@ -15,7 +15,10 @@ from unittest.mock import MagicMock
 import pytest
 from coreason_manifest.spec.ontology import (
     EphemeralNamespacePartitionState,
+    PermissionBoundaryPolicy,
     SecureSubSessionState,
+    SideEffectProfile,
+    ToolManifest,
 )
 
 from coreason_actuator.sandbox import (
@@ -26,6 +29,7 @@ from coreason_actuator.sandbox import (
     StatefulSandboxCache,
     WasmSandboxProvider,
     verify_bytecode_safety,
+    verify_network_access,
 )
 
 
@@ -180,3 +184,50 @@ def test_verify_bytecode_safety_failure() -> None:
     bytecode = b"print('hello')"
 
     assert verify_bytecode_safety(bytecode, ["invalid_hash"]) is False
+
+
+def create_tool_manifest(network_access: bool) -> ToolManifest:
+    return ToolManifest(
+        tool_name="test_tool",
+        description="A test tool",
+        input_schema={"type": "object"},
+        side_effects=SideEffectProfile(mutates_state=False, is_idempotent=True),
+        permissions=PermissionBoundaryPolicy(
+            network_access=network_access,
+            file_system_mutation_forbidden=True,
+        ),
+    )
+
+
+def test_verify_network_access_both_true() -> None:
+    manifest = create_tool_manifest(network_access=True)
+    partition_state = create_partition_state("wasm32-wasi")
+    # Need to override allow_network_egress
+    object.__setattr__(partition_state, "allow_network_egress", True)
+
+    assert verify_network_access(manifest, partition_state) is True
+
+
+def test_verify_network_access_both_false() -> None:
+    manifest = create_tool_manifest(network_access=False)
+    partition_state = create_partition_state("wasm32-wasi")
+    object.__setattr__(partition_state, "allow_network_egress", False)
+
+    assert verify_network_access(manifest, partition_state) is False
+
+
+def test_verify_network_access_tool_false_sandbox_true() -> None:
+    manifest = create_tool_manifest(network_access=False)
+    partition_state = create_partition_state("wasm32-wasi")
+    object.__setattr__(partition_state, "allow_network_egress", True)
+
+    assert verify_network_access(manifest, partition_state) is False
+
+
+def test_verify_network_access_conflict_raises() -> None:
+    manifest = create_tool_manifest(network_access=True)
+    partition_state = create_partition_state("wasm32-wasi")
+    object.__setattr__(partition_state, "allow_network_egress", False)
+
+    with pytest.raises(PermissionError, match="Dual-Evaluation Permission Boundary conflict"):
+        verify_network_access(manifest, partition_state)
