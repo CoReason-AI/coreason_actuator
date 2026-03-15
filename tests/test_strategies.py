@@ -479,17 +479,22 @@ async def test_mcp_client_strategy_none_parameters() -> None:
 
 
 class MockKinematicBrowser:
-    def __init__(self) -> None:
-        self.clicked_coords: list[tuple[float, float]] = []
-        self.typed_texts: list[tuple[float, float, str]] = []
+    def __init__(self, should_fail_verification: bool = False) -> None:
+        self.clicked_coords: list[tuple[float, float, str, int]] = []
+        self.typed_texts: list[tuple[float, float, str, str, int]] = []
         self.screenshots: list[bytes] = []
+        self.should_fail_verification = should_fail_verification
 
-    async def click(self, x: float, y: float) -> Any:
-        self.clicked_coords.append((x, y))
+    async def click(self, x: float, y: float, expected_visual_concept: str, timeout: int = 100) -> Any:
+        if self.should_fail_verification:
+            raise RuntimeError(f"Visual verification failed: Expected concept '{expected_visual_concept}' not found")
+        self.clicked_coords.append((x, y, expected_visual_concept, timeout))
         return "click_success"
 
-    async def type_text(self, x: float, y: float, text: str) -> Any:
-        self.typed_texts.append((x, y, text))
+    async def type_text(self, x: float, y: float, text: str, expected_visual_concept: str, timeout: int = 100) -> Any:
+        if self.should_fail_verification:
+            raise RuntimeError(f"Visual verification failed: Expected concept '{expected_visual_concept}' not found")
+        self.typed_texts.append((x, y, text, expected_visual_concept, timeout))
         return "type_success"
 
     async def get_accessibility_tree_hash(self, x: float, y: float) -> str:
@@ -500,21 +505,10 @@ class MockKinematicBrowser:
         return b"mock_image_bytes"
 
 
-class MockAccessibilityTree:
-    def __init__(self, should_verify: bool = True) -> None:
-        self.should_verify = should_verify
-        self.verified_concepts: list[tuple[float, float, str]] = []
-
-    async def verify_concept(self, x: float, y: float, expected_visual_concept: str) -> bool:
-        self.verified_concepts.append((x, y, expected_visual_concept))
-        return self.should_verify
-
-
 @pytest.mark.asyncio
 async def test_kinematic_strategy_click_success() -> None:
     browser = MockKinematicBrowser()
-    accessibility_tree = MockAccessibilityTree(should_verify=True)
-    strategy = KinematicExecutionStrategy(browser, accessibility_tree)
+    strategy = KinematicExecutionStrategy(browser)
 
     intent = ToolInvocationEvent(
         event_id="test_event_id",
@@ -525,6 +519,7 @@ async def test_kinematic_strategy_click_success() -> None:
             "y": 200.0,
             "expected_visual_concept": "Submit Button",
             "action": "click",
+            "timeout": 200,
         },
         zk_proof=create_mock_zk_proof(),
         agent_attestation=create_mock_attestation(),
@@ -534,17 +529,14 @@ async def test_kinematic_strategy_click_success() -> None:
     result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
 
     assert result == "click_success"
-    assert len(accessibility_tree.verified_concepts) == 1
-    assert accessibility_tree.verified_concepts[0] == (100.0, 200.0, "Submit Button")
     assert len(browser.clicked_coords) == 1
-    assert browser.clicked_coords[0] == (100.0, 200.0)
+    assert browser.clicked_coords[0] == (100.0, 200.0, "Submit Button", 200)
 
 
 @pytest.mark.asyncio
 async def test_kinematic_strategy_type_text_success() -> None:
     browser = MockKinematicBrowser()
-    accessibility_tree = MockAccessibilityTree(should_verify=True)
-    strategy = KinematicExecutionStrategy(browser, accessibility_tree)
+    strategy = KinematicExecutionStrategy(browser)
 
     intent = ToolInvocationEvent(
         event_id="test_event_id",
@@ -565,17 +557,14 @@ async def test_kinematic_strategy_type_text_success() -> None:
     result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
 
     assert result == "type_success"
-    assert len(accessibility_tree.verified_concepts) == 1
-    assert accessibility_tree.verified_concepts[0] == (100.0, 200.0, "Username Field")
     assert len(browser.typed_texts) == 1
-    assert browser.typed_texts[0] == (100.0, 200.0, "testuser")
+    assert browser.typed_texts[0] == (100.0, 200.0, "testuser", "Username Field", 100)
 
 
 @pytest.mark.asyncio
 async def test_kinematic_strategy_verification_failure() -> None:
-    browser = MockKinematicBrowser()
-    accessibility_tree = MockAccessibilityTree(should_verify=False)
-    strategy = KinematicExecutionStrategy(browser, accessibility_tree)
+    browser = MockKinematicBrowser(should_fail_verification=True)
+    strategy = KinematicExecutionStrategy(browser)
 
     intent = ToolInvocationEvent(
         event_id="test_event_id",
@@ -595,15 +584,13 @@ async def test_kinematic_strategy_verification_failure() -> None:
     with pytest.raises(RuntimeError, match="Visual verification failed: Expected concept 'Submit Button' not found"):
         await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
 
-    assert len(accessibility_tree.verified_concepts) == 1
     assert len(browser.clicked_coords) == 0
 
 
 @pytest.mark.asyncio
 async def test_kinematic_strategy_missing_params() -> None:
     browser = MockKinematicBrowser()
-    accessibility_tree = MockAccessibilityTree(should_verify=True)
-    strategy = KinematicExecutionStrategy(browser, accessibility_tree)
+    strategy = KinematicExecutionStrategy(browser)
 
     intent = ToolInvocationEvent(
         event_id="test_event_id",
@@ -625,8 +612,7 @@ async def test_kinematic_strategy_missing_params() -> None:
 @pytest.mark.asyncio
 async def test_kinematic_strategy_invalid_coords() -> None:
     browser = MockKinematicBrowser()
-    accessibility_tree = MockAccessibilityTree(should_verify=True)
-    strategy = KinematicExecutionStrategy(browser, accessibility_tree)
+    strategy = KinematicExecutionStrategy(browser)
 
     intent = ToolInvocationEvent(
         event_id="test_event_id",
@@ -643,15 +629,14 @@ async def test_kinematic_strategy_invalid_coords() -> None:
     )
     manifest = create_mock_manifest()
 
-    with pytest.raises(ValueError, match=r"Coordinates 'x' and 'y' must be valid numbers\."):
+    with pytest.raises(ValueError, match=r"Coordinates 'x', 'y' and 'timeout' must be valid numbers\."):
         await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
 
 
 @pytest.mark.asyncio
 async def test_kinematic_strategy_missing_text_param() -> None:
     browser = MockKinematicBrowser()
-    accessibility_tree = MockAccessibilityTree(should_verify=True)
-    strategy = KinematicExecutionStrategy(browser, accessibility_tree)
+    strategy = KinematicExecutionStrategy(browser)
 
     intent = ToolInvocationEvent(
         event_id="test_event_id",
@@ -675,8 +660,7 @@ async def test_kinematic_strategy_missing_text_param() -> None:
 @pytest.mark.asyncio
 async def test_kinematic_strategy_unsupported_action() -> None:
     browser = MockKinematicBrowser()
-    accessibility_tree = MockAccessibilityTree(should_verify=True)
-    strategy = KinematicExecutionStrategy(browser, accessibility_tree)
+    strategy = KinematicExecutionStrategy(browser)
 
     intent = ToolInvocationEvent(
         event_id="test_event_id",
