@@ -14,6 +14,7 @@ from coreason_manifest.spec.ontology import (
     BoundedJSONRPCIntent,
     JSONRPCErrorResponseState,
     JSONRPCErrorState,
+    StateHydrationManifest,
     ToolInvocationEvent,
 )
 from pydantic import ValidationError
@@ -57,6 +58,32 @@ class IPCValidator:
 
         # Extract ToolInvocationEvent from params
         params = intent.params or {}
+
+        # Extract and validate StateHydrationManifest
+        state_hydration_dict = params.pop("state_hydration", None)
+        if state_hydration_dict is None:
+            return JSONRPCErrorResponseState(
+                jsonrpc="2.0",
+                id=intent.id,
+                error=JSONRPCErrorState(
+                    code=-32602,
+                    message="Invalid params: Payload is missing strictly required state_hydration.",
+                ),
+            )
+
+        try:
+            state_hydration_manifest = StateHydrationManifest.model_validate(state_hydration_dict)
+        except ValidationError as e:
+            return JSONRPCErrorResponseState(
+                jsonrpc="2.0",
+                id=intent.id,
+                error=JSONRPCErrorState(
+                    code=-32602,
+                    message="Invalid params: Payload does not conform to StateHydrationManifest bounds.",
+                    data={"details": e.errors()},
+                ),
+            )
+
         try:
             tool_invocation = ToolInvocationEvent.model_validate(params)
         except ValidationError as e:
@@ -69,6 +96,9 @@ class IPCValidator:
                     data={"details": e.errors()},
                 ),
             )
+
+        # Natively bind the state hydration manifest to the tool invocation
+        object.__setattr__(tool_invocation, "state_hydration", state_hydration_manifest)
 
         # Mathematical verification of ZK proof and agent attestation
         if not self.verifier.verify(tool_invocation):
