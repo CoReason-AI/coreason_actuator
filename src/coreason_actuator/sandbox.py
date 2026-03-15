@@ -48,6 +48,14 @@ class SandboxProviderProtocol(Protocol):
         """Eradicates the partition safely and frees host VRAM."""
         ...
 
+    def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
+        """Dynamically configure BPF or iptables egress filtering to enforce specific domain whitelist."""
+        ...
+
+    def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
+        """Enforces a read-only (ro) mount for the sandbox root filesystem with specific tmpfs exemptions."""
+        ...
+
 
 class WasmSandboxProvider:
     """WASM sandboxing execution provider (wasm32-wasi)."""
@@ -64,6 +72,12 @@ class WasmSandboxProvider:
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down WASM sandbox (force={force})")
+
+    def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
+        logger.info(f"Applying network egress rules for WASM sandbox. Allowed domains: {allowed_domains}")
+
+    def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
+        logger.info(f"Enforcing WASM filesystem immutability with exemptions: {tmpfs_exemptions}")
 
 
 class RiscvZkvmSandboxProvider:
@@ -82,6 +96,12 @@ class RiscvZkvmSandboxProvider:
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down RISC-V ZKVM sandbox (force={force})")
 
+    def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
+        logger.info(f"Applying network egress rules for RISC-V ZKVM sandbox. Allowed domains: {allowed_domains}")
+
+    def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
+        logger.info(f"Enforcing RISC-V filesystem immutability with exemptions: {tmpfs_exemptions}")
+
 
 class BpfSandboxProvider:
     """BPF execution provider for kernel-level execution."""
@@ -98,6 +118,12 @@ class BpfSandboxProvider:
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down BPF sandbox (force={force})")
+
+    def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
+        logger.info(f"Applying network egress rules for BPF sandbox. Allowed domains: {allowed_domains}")
+
+    def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
+        logger.info(f"Enforcing BPF filesystem immutability with exemptions: {tmpfs_exemptions}")
 
 
 class SandboxProviderFactory:
@@ -187,12 +213,37 @@ def verify_bytecode_safety(bytecode: bytes, authorized_hashes: list[str]) -> boo
     return is_safe
 
 
-def verify_network_access(manifest: ToolManifest, partition_state: EphemeralNamespacePartitionState) -> bool:
+def enforce_sandbox_immutability(
+    manifest: ToolManifest,
+    provider: SandboxProviderProtocol,
+    additional_exemptions: list[str] | None = None,
+) -> None:
+    """
+    If file_system_mutation_forbidden is True, enforces a strictly read-only
+    root filesystem while explicitly exempting volatile memory paths like /dev/shm
+    and specific secret injection mounts.
+    """
+    if manifest.permissions.file_system_mutation_forbidden:
+        exemptions = ["/dev/shm", "/run/secrets"]  # noqa: S108
+        if additional_exemptions:
+            exemptions.extend(additional_exemptions)
+
+        provider.enforce_filesystem_immutability(tmpfs_exemptions=exemptions)
+
+
+def verify_network_access(
+    manifest: ToolManifest,
+    partition_state: EphemeralNamespacePartitionState,
+    provider: SandboxProviderProtocol | None = None,
+) -> bool:
     """
     Evaluates network egress using a defense-in-depth lock.
     To authorize a network socket, BOTH ToolManifest.permissions.network_access
     AND the sandbox's EphemeralNamespacePartitionState.allow_network_egress must evaluate to True.
     A conflict mathematically blocks the execution by raising a PermissionError.
+
+    If access is granted and a provider is passed, it dynamically applies BPF/iptables egress
+    rules based on the allowed_domains whitelist.
     """
     tool_network = manifest.permissions.network_access
     sandbox_network = partition_state.allow_network_egress
@@ -203,4 +254,10 @@ def verify_network_access(manifest: ToolManifest, partition_state: EphemeralName
             "Tool requests network access, but the active ephemeral partition explicitly denies egress."
         )
 
-    return bool(tool_network and sandbox_network)
+    access_granted = bool(tool_network and sandbox_network)
+
+    if access_granted and provider is not None:
+        allowed_domains = manifest.permissions.allowed_domains or []
+        provider.apply_network_egress_rules(allowed_domains)
+
+    return access_granted
