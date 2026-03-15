@@ -42,14 +42,22 @@ class CryptographicVerifierProtocol(Protocol):
 
 
 class KinematicBrowserProtocol(Protocol):
-    """Protocol abstracting the headless browser kinematic operations."""
+    """Protocol abstracting the headless browser kinematic operations using strictly atomic locators."""
 
-    async def click(self, x: float, y: float) -> Any:
-        """Executes a physical click at the given X/Y coordinates."""
+    async def click(self, x: float, y: float, expected_visual_concept: str, timeout: int = 100) -> Any:
+        """
+        Executes a physical click at the given X/Y coordinates ONLY if the semantic anchor
+        (expected_visual_concept) is mathematically verified in the same operation.
+        Eliminates TOCTOU race conditions.
+        """
         ...
 
-    async def type_text(self, x: float, y: float, text: str) -> Any:
-        """Executes a physical text typing at the given X/Y coordinates."""
+    async def type_text(self, x: float, y: float, text: str, expected_visual_concept: str, timeout: int = 100) -> Any:
+        """
+        Executes a physical text typing at the given X/Y coordinates ONLY if the semantic anchor
+        (expected_visual_concept) is mathematically verified in the same operation.
+        Eliminates TOCTOU race conditions.
+        """
         ...
 
     async def get_accessibility_tree_hash(self, x: float, y: float) -> str:
@@ -58,15 +66,4 @@ class KinematicBrowserProtocol(Protocol):
 
     async def capture_viewport_screenshot(self) -> bytes:
         """Captures a rasterized viewport image buffer."""
-        ...
-
-
-class AccessibilityTreeProtocol(Protocol):
-    """Protocol for semantic visual verification before physical interaction."""
-
-    async def verify_concept(self, x: float, y: float, expected_visual_concept: str) -> bool:
-        """
-        Functionally verifies the presence of the expected_visual_concept at the target coordinates.
-        If the semantic anchor has shifted or is missing, returns False.
-        """
         ...
