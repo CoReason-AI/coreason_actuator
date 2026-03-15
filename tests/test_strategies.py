@@ -40,12 +40,12 @@ from coreason_actuator.strategies import (
 
 class MockLockManager:
     def __init__(self) -> None:
-        self.acquired_locks: list[str] = []
+        self.acquired_locks: list[tuple[str, int | None]] = []
         self.released_locks: list[str] = []
 
     @asynccontextmanager
-    async def acquire(self, lock_key: str) -> AsyncIterator[Any]:
-        self.acquired_locks.append(lock_key)
+    async def acquire(self, lock_key: str, ttl: int | None = None) -> AsyncIterator[Any]:
+        self.acquired_locks.append((lock_key, ttl))
         try:
             yield self
         finally:
@@ -311,10 +311,13 @@ async def test_native_execution_strategy_state_mutation_locking() -> None:
 
     # Check lock acquisition
     expected_hash = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
-    expected_lock_key = f"test_tool:{expected_hash}"
+    expected_lock_key = f"lock:test_tool:{expected_hash}:test_event"
+
+    # default max_execution_time_ms is 1000 from create_mock_manifest
+    expected_ttl = 1000
 
     assert len(lock_manager.acquired_locks) == 1
-    assert lock_manager.acquired_locks[0] == expected_lock_key
+    assert lock_manager.acquired_locks[0] == (expected_lock_key, expected_ttl)
     assert len(lock_manager.released_locks) == 1
     assert lock_manager.released_locks[0] == expected_lock_key
 
