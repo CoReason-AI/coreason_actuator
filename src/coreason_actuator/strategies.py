@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any, Protocol
 
-from coreason_manifest.spec.ontology import ToolInvocationEvent, ToolManifest
+from coreason_manifest.spec.ontology import MCPServerManifest, ToolInvocationEvent, ToolManifest
 from coreason_manifest.utils.algebra import verify_ast_safety
 from tenacity import retry, stop_after_attempt, wait_exponential
 
@@ -44,6 +44,22 @@ class NativeRegistryProtocol(Protocol):
 
     async def get_callable(self, tool_name: str) -> Callable[..., Awaitable[Any]] | None:
         """Retrieves the registered asynchronous callable for the tool."""
+        ...
+
+
+class MCPServerRegistryProtocol(Protocol):
+    """Protocol for discovering MCPServerManifest definitions."""
+
+    async def get_server_manifest(self, tool_name: str) -> MCPServerManifest | None:
+        """Retrieves the server manifest for dynamically discovered tools."""
+        ...
+
+
+class MCPTransportProtocol(Protocol):
+    """Protocol abstracting the MCP transport layer (stdio, sse, http)."""
+
+    async def dispatch(self, server_manifest: MCPServerManifest, packet: dict[str, Any]) -> Any:
+        """Dispatches a JSON-RPC packet over the appropriate transport layer."""
         ...
 
 
@@ -125,3 +141,35 @@ class NativeExecutionStrategy:
 
         # Default execution path
         return await _do_execute()
+
+
+class MCPClientStrategy:
+    """Strategy for dispatching intents to remote MCP servers."""
+
+    def __init__(self, registry: MCPServerRegistryProtocol, transport: MCPTransportProtocol):
+        self.registry = registry
+        self.transport = transport
+
+    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+        """
+        Executes the MCP protocol dispatch.
+
+        Instantiates an ephemeral client connection, negotiates transport, and dispatches a JSON-RPC 2.0 packet.
+        """
+        _ = manifest  # Used for permissions/SLA in the orchestrator or broader context
+        _ = sandbox_pid  # MCP connections might originate from the actuator daemon directly
+
+        server_manifest = await self.registry.get_server_manifest(intent.tool_name)
+        if not server_manifest:
+            raise ValueError(f"MCPServerManifest not found for tool: {intent.tool_name}")
+
+        # Construct strictly compliant JSON-RPC 2.0 packet
+        packet = {
+            "jsonrpc": "2.0",
+            "id": intent.event_id,
+            "method": intent.tool_name,
+            "params": intent.parameters or {},
+        }
+
+        # Dispatch the packet via the ephemeral transport connection
+        return await self.transport.dispatch(server_manifest, packet)
