@@ -1,41 +1,39 @@
-# Plan Review
-## Goal:
-Implement Atomic Unit 1: IPC Ingress & Pre-Flight Validation for the Kinetic Actuator Engine (`coreason_actuator`).
+Yes! Pydantic models with `frozen=True` can be modified using `object.__setattr__(event, 'state_hydration', manifest)`.
+And this satisfies "The Actuator MUST rely exclusively on the StateHydrationManifest natively bound to the ToolInvocationEvent.state_hydration field", because the field will literally be available via `.state_hydration` on the `ToolInvocationEvent` instance.
 
-## Atomic Unit 1 Scope:
-1.  **IPC Daemon Subscription (FR-1.1):**
-    *   Since the engine is designed as an IPC daemon, we need a service/class that subscribes to a designated IPC message broker. The `TRD` mentions `asyncio` polling an IPC message queue (`Redis`, `RabbitMQ`, or `gRPC stream`).
-    *   For the scope of this atomic unit, we can create an abstract `IPCBroker` protocol and an `ActuatorDaemon` class that continuously polls the broker using an `asyncio` event loop. We can implement an in-memory or a basic mock queue for testing.
-2.  **Backpressure & Load Shedding (FR-1.2):**
-    *   The `ActuatorDaemon` must enforce `BackpressurePolicy.max_concurrent_tool_invocations`. If the internal execution pool is saturated, it MUST yield the payload back to the broker or return an immediate `JSONRPCErrorResponseState` indicating a `429 Too Many Requests` pre-flight rejection to prevent daemon crash.
-    *   *Implementation detail:* Maintain a `current_concurrent_invocations` counter and compare it against `max_concurrent_invocations`.
-3.  **Cryptographic Intent Authorization (FR-1.3):**
-    *   Upon dequeuing a `BoundedJSONRPCIntent` containing a `ToolInvocationEvent`, mathematically verify the `zk_proof` and `agent_attestation`.
-    *   *Implementation detail:* We'll need a verifier component. For this unit, we will create a `CryptographicVerifier` protocol/service with a `verify(intent)` method. Since we can't implement real ZK proof verification without actual cryptography libraries (and it might be out of scope for just this package), we will create a mock-able structure that enforces the presence and formatting, and allows injecting a real verifier later or simulating rejection for invalid proofs. Wait, `FR-1.3` says: "mathematically verify the zk_proof... If the proofs are invalid or missing, it MUST reject the payload and quarantine the event."
-4.  **Topological Registry Verification (FR-1.4):**
-    *   Verify that `tool_name` exists within its currently mounted `ActionSpaceManifest` (or a `ToolRegistry`).
-    *   *Implementation detail:* Create a `ToolRegistry` that holds `ToolManifest` definitions. If absent, emit `JSONRPCErrorResponseState` indicating tool is missing.
-5.  **Dual-Evaluation Permission Boundary (FR-1.5):**
-    *   Verify `ToolManifest.permissions.network_access` AND `EphemeralNamespacePartitionState.allow_network_egress` evaluate to True for network socket authorization.
-    *   *Implementation detail:* Create a validation step that checks these two conditions. *Correction*: This permission check happens *during* or *before* execution, but the prompt says it's part of Pre-Flight validation. However, `EphemeralNamespacePartitionState` is created *during* Module 2 (Sandbox Provisioning). The FR says: "To authorize a network socket, the Actuator MUST functionally verify that BOTH... evaluate to True. A conflict MUST result in mathematical blocking of the execution." This feels slightly more related to execution or sandbox provisioning. Let's include a validation function for this, but maybe it's called later. Let's focus on the initial Ingress components.
+So the task is:
+1. In `src/coreason_actuator/ingress.py`, update `validate_intent` to properly parse `state_hydration` from `intent.params`. Since `ToolInvocationEvent` doesn't know about it and would reject it, we must first pop it, parse it as a `StateHydrationManifest`, parse the rest as `ToolInvocationEvent`, and then bind it natively using `object.__setattr__(tool_invocation, "state_hydration", state_hydration_manifest)`. If it's not present, what happens? "The Actuator MUST rely exclusively on the StateHydrationManifest" - implies it's required. If missing or invalid, we should return a `JSONRPCErrorResponseState` with code `400` or `-32602`? Actually, for missing or invalid params, we return `-32602` (Invalid params).
+2. Add tests to verify that `state_hydration` parsing works, and that missing/invalid `state_hydration` yields the appropriate error.
+Wait! What if the FRD meant that `state_hydration` is passed AS `intent.state_hydration`?
+No, FRD: "natively bound to the ToolInvocationEvent.state_hydration field". The JSON-RPC payload looks like this:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "...",
+  "params": {
+    "tool_name": "...",
+    "parameters": {},
+    "zk_proof": {...},
+    "agent_attestation": {...},
+    "state_hydration": {
+        "epistemic_coordinate": "...",
+        "crystallized_ledger_cids": [...],
+        ...
+    }
+  }
+}
+```
+If we look at `BoundedJSONRPCIntent`, `params` is exactly the dict used to construct the `ToolInvocationEvent`. So it makes sense that `state_hydration` is inside `params`, we pop it, parse it, construct `ToolInvocationEvent`, and then natively bind it.
 
-## Proposed Steps for Implementation:
-1.  **Define Core Interfaces (`src/coreason_actuator/interfaces.py` or similar):**
-    *   `IPCBrokerProtocol`
-    *   `ToolRegistryProtocol`
-    *   `CryptographicVerifierProtocol`
-2.  **Implement the IPC Ingress Service (`src/coreason_actuator/ingress.py`):**
-    *   Create a class `IPCValidator` that encapsulates FR-1.3 (Cryptographic) and FR-1.4 (Registry) logic.
-    *   Implement methods to take a raw payload (from broker), deserialize it using `coreason-manifest` models (`ToolInvocationEvent`), and perform the validations.
-3.  **Implement the Daemon Loop (`src/coreason_actuator/daemon.py`):**
-    *   Create `ActuatorDaemon` class.
-    *   Implement an asynchronous loop `async def run()`.
-    *   Implement backpressure logic (FR-1.2).
-4.  **Write Tests (`tests/test_ingress.py`, `tests/test_daemon.py`):**
-    *   Test successful validation.
-    *   Test failure on invalid ZK proof.
-    *   Test failure on missing tool.
-    *   Test backpressure (429 Too Many Requests response).
-5.  **Pre-commit verification.**
+Let's double check if there are any other modifications required in `daemon.py` or elsewhere.
+"The Actuator MUST rely exclusively on the StateHydrationManifest natively bound to the ToolInvocationEvent.state_hydration field to receive its execution context, completely avoiding state ledger queries."
+This means the actuator doesn't query the ledger. In our implementation of `ActuatorDaemon`, we dispatch the intent. `ExecutionStrategyProtocol` currently doesn't use `state_hydration`, but that might be implemented in later atomic units, or we should at least pass it or verify it's there. Actually, the atomic unit we are solving is "IPC Ingress & Pre-Flight Validation", so we only need to implement the parsing and validation in `IPCValidator`.
 
-I will now request a review of this plan.
+Let's outline the plan:
+1. Update `IPCValidator` in `src/coreason_actuator/ingress.py` to extract `state_hydration` from `params` before validating `ToolInvocationEvent`.
+2. Parse `state_hydration` using `StateHydrationManifest.model_validate(state_hydration)`.
+3. If parsing fails, return `JSONRPCErrorResponseState` with code `-32602` (Invalid params).
+4. Parse the remaining `params` using `ToolInvocationEvent.model_validate(params)`.
+5. Bind the `state_hydration` manifest to the `ToolInvocationEvent` instance using `object.__setattr__`.
+6. Update `tests/test_ingress.py` to include `state_hydration` in `get_valid_raw_payload()`.
+7. Add tests for invalid/missing `state_hydration`.
