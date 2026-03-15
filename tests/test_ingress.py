@@ -62,6 +62,12 @@ def get_valid_raw_payload() -> dict[str, Any]:
                 "cryptographic_blob": "blob",
                 "latent_state_commitments": {},
             },
+            "state_hydration": {
+                "epistemic_coordinate": "test_coordinate",
+                "crystallized_ledger_cids": ["a" * 64, "b" * 64],
+                "working_context_variables": {"context": "test_context"},
+                "max_retained_tokens": 1000,
+            },
         },
     }
 
@@ -87,6 +93,41 @@ def test_validator_success() -> None:
     assert isinstance(result, ToolInvocationEvent)
     assert result.tool_name == "test_tool"
     assert result.parameters == {"arg": "value"}
+    assert hasattr(result, "state_hydration")
+    assert result.state_hydration.epistemic_coordinate == "test_coordinate"
+
+
+def test_validator_missing_state_hydration() -> None:
+    registry = MockRegistry({"test_tool": get_mock_tool()})
+    verifier = MockVerifier(should_pass=True)
+    validator = IPCValidator(registry, verifier)
+
+    payload = get_valid_raw_payload()
+    if "params" in payload and isinstance(payload["params"], dict):
+        payload["params"].pop("state_hydration", None)
+
+    result = validator.validate_intent(payload)
+
+    assert isinstance(result, JSONRPCErrorResponseState)
+    assert result.error.code == -32602
+    assert "strictly required state_hydration" in result.error.message
+
+
+def test_validator_invalid_state_hydration() -> None:
+    registry = MockRegistry({"test_tool": get_mock_tool()})
+    verifier = MockVerifier(should_pass=True)
+    validator = IPCValidator(registry, verifier)
+
+    payload = get_valid_raw_payload()
+    if "params" in payload and isinstance(payload["params"], dict):
+        # Provide an invalid state_hydration (e.g. missing required epistemic_coordinate)
+        payload["params"]["state_hydration"] = {"crystallized_ledger_cids": ["a" * 64]}
+
+    result = validator.validate_intent(payload)
+
+    assert isinstance(result, JSONRPCErrorResponseState)
+    assert result.error.code == -32602
+    assert "does not conform to StateHydrationManifest" in result.error.message
 
 
 def test_validator_invalid_rpc_intent() -> None:
