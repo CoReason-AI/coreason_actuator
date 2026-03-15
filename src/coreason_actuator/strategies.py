@@ -149,7 +149,7 @@ class NativeExecutionStrategy:
         if is_idempotent:
             # We define a retry-wrapped function
             # Retrying on general Exceptions for demonstration. In a real scenario, this might be NetworkError etc.
-            @retry(wait=wait_exponential(multiplier=1, min=1, max=10), stop=stop_after_attempt(3), reraise=True)  # type: ignore[misc]
+            @retry(wait=wait_exponential(multiplier=1, min=1, max=10), stop=stop_after_attempt(3), reraise=True)
             async def _retry_execute() -> Any:
                 return await _do_execute()
 
