@@ -25,8 +25,23 @@ from coreason_manifest.spec.ontology import (
 from coreason_actuator.ingress import IPCValidator
 from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, IPCBrokerProtocol
 from coreason_actuator.sandbox import SandboxProviderProtocol
+from coreason_actuator.security import MaskingFunctor
 from coreason_actuator.strategies import ExecutionStrategyProtocol
 from coreason_actuator.utils.logger import logger
+
+
+def scrub_payload(data: Any, masking_functor: MaskingFunctor) -> Any:
+    """Recursively scrub string values in any JSON primitive or nested structure."""
+    if isinstance(data, str):
+        return masking_functor.redact(data)
+    if isinstance(data, dict):
+        return {
+            (masking_functor.redact(k) if isinstance(k, str) else k): scrub_payload(v, masking_functor)
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [scrub_payload(item, masking_functor) for item in data]
+    return data
 
 
 class ActuatorDaemon:
@@ -50,6 +65,11 @@ class ActuatorDaemon:
         self.active_tasks: dict[str, asyncio.Task[Any]] = {}
         self.preempted_events: set[str] = set()
         self.active_sandboxes: dict[str, SandboxProviderProtocol] = {}
+        self.masking_functor: MaskingFunctor | None = None
+
+    def set_masking_functor(self, masking_functor: MaskingFunctor) -> None:
+        """Sets the masking functor to be used for secret scrubbing."""
+        self.masking_functor = masking_functor
 
     async def start(self) -> None:
         """Starts the main polling loop of the IPC Daemon."""
@@ -176,6 +196,9 @@ class ActuatorDaemon:
             if intent.event_id in self.preempted_events:
                 payload = {"execution_status": "completed_under_preemption", "null_hash": True}
 
+            if self.masking_functor:
+                payload = scrub_payload(payload, self.masking_functor)
+
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),
                 timestamp=time.time(),
@@ -213,11 +236,16 @@ class ActuatorDaemon:
         except Exception:
             # Fatal Crash
             tb = traceback.format_exc()
+            if self.masking_functor:
+                tb = self.masking_functor.redact(tb)
+
+            payload = {"execution_status": "fatal_crash", "traceback": tb}
+
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),
                 timestamp=time.time(),
                 type="observation",
-                payload={"execution_status": "fatal_crash", "traceback": tb},
+                payload=payload,
                 triggering_invocation_id=intent.event_id,
             )
             logger.error(f"Tool {intent.tool_name} crashed: {tb}")
