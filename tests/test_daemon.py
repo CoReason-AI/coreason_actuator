@@ -12,7 +12,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from coreason_manifest.spec.ontology import BackpressurePolicy
+from coreason_manifest.spec.ontology import BackpressurePolicy, ToolInvocationEvent, ToolManifest
 
 from coreason_actuator.daemon import ActuatorDaemon
 
@@ -50,11 +50,56 @@ class MockValidator:
             return self.error_response
 
         # Just return a dummy event
-        # Note: In real life we'd mock cleanly, but we cheat here as _dispatch_intent only checks tool_name
-        class DummyIntent:
-            tool_name = "test_tool"
+        # Just return a proper mock event
+        return ToolInvocationEvent(
+            event_id="test_event_123",
+            timestamp=12345.6,
+            tool_name="test_tool",
+            parameters={},
+            zk_proof={
+                "proof_protocol": "zk-SNARK",
+                "public_inputs_hash": "a" * 64,
+                "verifier_key_id": "b",
+                "cryptographic_blob": "c",
+                "latent_state_commitments": {},
+            },
+            agent_attestation={
+                "training_lineage_hash": "a" * 64,
+                "developer_signature": "b",
+                "capability_merkle_root": "c" * 64,
+                "credential_presentations": [],
+            },
+        )
 
-        return DummyIntent()
+
+class MockRegistry:
+    def __init__(self, manifests: dict[str, ToolManifest] | None = None) -> None:
+        self.manifests = manifests or {}
+
+    def get_tool(self, tool_name: str) -> ToolManifest | None:
+        return self.manifests.get(tool_name)
+
+
+class MockExecutionStrategy:
+    def __init__(self, should_crash: bool = False, result: Any = "success_result") -> None:
+        self.should_crash = should_crash
+        self.result = result
+
+    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+        _ = (intent, manifest, sandbox_pid)
+        if self.should_crash:
+            raise RuntimeError("Mock execution crash")
+        return self.result
+
+
+def create_mock_manifest(tool_name: str = "test_tool") -> ToolManifest:
+    return ToolManifest(
+        tool_name=tool_name,
+        description="A mock tool",
+        input_schema={"type": "object"},
+        side_effects={"is_idempotent": True, "mutates_state": False},
+        permissions={"network_access": False, "file_system_mutation_forbidden": True},
+    )
 
 
 @pytest.mark.asyncio
@@ -62,13 +107,17 @@ async def test_daemon_successful_dispatch() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy()
+    registry = MockRegistry({"test_tool": create_mock_manifest()})
 
-    daemon = ActuatorDaemon(broker, validator, policy)  # type: ignore
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
     await daemon.run_once()
 
-    assert len(broker.pushed) == 0
-    # active tasks count remains 0 because dispatch mock increments then decrements immediately
+    assert len(broker.pushed) == 1
+    assert broker.pushed[0]["type"] == "observation"
+    assert broker.pushed[0]["payload"]["execution_status"] == "completed"
+    assert broker.pushed[0]["payload"]["result"] == "success_result"
 
 
 @pytest.mark.asyncio
@@ -77,8 +126,10 @@ async def test_daemon_backpressure_shedding() -> None:
     validator = MockValidator(should_fail=False)
     # Set max concurrent to 1, but seed active tasks to 1 to force shedding
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=1)
+    strategy = MockExecutionStrategy()
+    registry = MockRegistry()
 
-    daemon = ActuatorDaemon(broker, validator, policy)  # type: ignore
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
     daemon.active_tasks_count = 1
 
     await daemon.run_once()
@@ -93,8 +144,10 @@ async def test_daemon_validation_failure() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
     validator = MockValidator(should_fail=True)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy()
+    registry = MockRegistry()
 
-    daemon = ActuatorDaemon(broker, validator, policy)  # type: ignore
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
     await daemon.run_once()
 
@@ -108,8 +161,10 @@ async def test_daemon_start_stop() -> None:
     broker = MockBroker([])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy()
+    registry = MockRegistry()
 
-    daemon = ActuatorDaemon(broker, validator, policy)  # type: ignore
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
     # Run start as a background task
     task = asyncio.create_task(daemon.start())
@@ -124,3 +179,66 @@ async def test_daemon_start_stop() -> None:
     await task
 
     assert not daemon._is_running
+
+
+@pytest.mark.asyncio
+async def test_daemon_execution_success() -> None:
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy(result={"some": "data"})
+    registry = MockRegistry({"test_tool": create_mock_manifest()})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    await daemon.run_once()
+
+    assert len(broker.pushed) == 1
+    pushed = broker.pushed[0]
+    assert pushed["type"] == "observation"
+    assert pushed["payload"]["execution_status"] == "completed"
+    assert pushed["payload"]["result"] == {"some": "data"}
+    assert pushed["triggering_invocation_id"] == "test_event_123"
+
+
+@pytest.mark.asyncio
+async def test_daemon_execution_crash() -> None:
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy(should_crash=True)
+    registry = MockRegistry({"test_tool": create_mock_manifest()})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    await daemon.run_once()
+
+    assert len(broker.pushed) == 1
+    pushed = broker.pushed[0]
+    assert pushed["type"] == "observation"
+    assert pushed["payload"]["execution_status"] == "fatal_crash"
+    assert "Mock execution crash" in pushed["payload"]["traceback"]
+    assert pushed["triggering_invocation_id"] == "test_event_123"
+
+
+@pytest.mark.asyncio
+async def test_daemon_missing_manifest() -> None:
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy()
+    # Missing from registry
+    registry = MockRegistry({})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    await daemon.run_once()
+
+    assert len(broker.pushed) == 1
+    pushed = broker.pushed[0]
+    # In reality, IPCValidator should reject it first, but if it reaches _dispatch_intent without a manifest,
+    # it yields a JSONRPCErrorResponseState indicating Method not found.
+    assert pushed["jsonrpc"] == "2.0"
+    assert pushed["id"] == "1"
+    assert pushed["error"]["code"] == -32601
+    assert "Method not found: Tool 'test_tool' missing from the registry." in pushed["error"]["message"]

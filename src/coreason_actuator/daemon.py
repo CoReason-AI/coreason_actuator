@@ -9,17 +9,22 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import asyncio
+import time
+import traceback
+import uuid
 from typing import Any
 
 from coreason_manifest.spec.ontology import (
     BackpressurePolicy,
     JSONRPCErrorResponseState,
     JSONRPCErrorState,
+    ObservationEvent,
     ToolInvocationEvent,
 )
 
 from coreason_actuator.ingress import IPCValidator
-from coreason_actuator.interfaces import IPCBrokerProtocol
+from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, IPCBrokerProtocol
+from coreason_actuator.strategies import ExecutionStrategyProtocol
 from coreason_actuator.utils.logger import logger
 
 
@@ -31,10 +36,14 @@ class ActuatorDaemon:
         broker: IPCBrokerProtocol,
         validator: IPCValidator,
         backpressure_policy: BackpressurePolicy,
+        execution_strategy: ExecutionStrategyProtocol,
+        registry: ActionSpaceRegistryProtocol,
     ) -> None:
         self.broker = broker
         self.validator = validator
         self.backpressure_policy = backpressure_policy
+        self.execution_strategy = execution_strategy
+        self.registry = registry
         self.active_tasks_count = 0
         self._is_running = False
 
@@ -89,16 +98,56 @@ class ActuatorDaemon:
             await self.broker.push(result.model_dump())
             return
 
-        # Simulated Execution Hook (In future units, this will route to The Do-Operator)
+        # Execute the intent
         await self._dispatch_intent(result, raw_payload.get("id"))
 
     async def _dispatch_intent(self, intent: ToolInvocationEvent, request_id: Any) -> None:
         """
-        Temporarily holds place for the execution routing logic.
-        For now, we just acknowledge receipt and update metrics.
+        Executes the tool intent via the Do-Operator and returns an ObservationEvent.
         """
         self.active_tasks_count += 1
         logger.info(f"Dispatched tool invocation: {intent.tool_name}", request_id=request_id)
-        # We decrement it here for now to avoid the pool filling up during tests.
-        # In reality, this decrement occurs when the tool finishes executing.
-        self.active_tasks_count -= 1
+
+        try:
+            # Get manifest from registry to pass to execution strategy
+            manifest = self.registry.get_tool(intent.tool_name)
+            if not manifest:
+                logger.error(f"ToolManifest not found for tool: {intent.tool_name}")
+                error_response = JSONRPCErrorResponseState(
+                    jsonrpc="2.0",
+                    id=request_id,
+                    error=JSONRPCErrorState(
+                        code=-32601,
+                        message=f"Method not found: Tool '{intent.tool_name}' missing from the registry.",
+                    ),
+                )
+                await self.broker.push(error_response.model_dump())
+                return
+
+            # Execute Do-Operator
+            result = await self.execution_strategy.execute(intent, manifest, sandbox_pid=None)
+
+            # Successful Execution
+            observation = ObservationEvent(
+                event_id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                type="observation",
+                payload={"execution_status": "completed", "result": result},
+                triggering_invocation_id=intent.event_id,
+            )
+            logger.info(f"Tool {intent.tool_name} executed successfully.")
+            await self.broker.push(observation.model_dump())
+        except Exception:
+            # Fatal Crash
+            tb = traceback.format_exc()
+            observation = ObservationEvent(
+                event_id=str(uuid.uuid4()),
+                timestamp=time.time(),
+                type="observation",
+                payload={"execution_status": "fatal_crash", "traceback": tb},
+                triggering_invocation_id=intent.event_id,
+            )
+            logger.error(f"Tool {intent.tool_name} crashed: {tb}")
+            await self.broker.push(observation.model_dump())
+        finally:
+            self.active_tasks_count -= 1
