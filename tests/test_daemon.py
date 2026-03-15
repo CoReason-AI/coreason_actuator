@@ -18,6 +18,16 @@ from coreason_actuator.daemon import ActuatorDaemon
 from coreason_actuator.security import MaskingFunctor
 
 
+class MockVault:
+    def __init__(self, secrets: dict[str, str]) -> None:
+        self.secrets = secrets
+        self.unsealed_keys: list[str] = []
+
+    def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
+        self.unsealed_keys.extend(auth_requirements)
+        return self.secrets
+
+
 class MockBroker:
     def __init__(self, payloads: list[dict[str, Any]]) -> None:
         self.payloads = payloads
@@ -52,9 +62,13 @@ class MockValidator:
 
         # Just return a dummy event
         # Just return a proper mock event
-        from coreason_manifest.spec.ontology import AgentAttestationReceipt, ZeroKnowledgeReceipt
+        from coreason_manifest.spec.ontology import (
+            AgentAttestationReceipt,
+            StateHydrationManifest,
+            ZeroKnowledgeReceipt,
+        )
 
-        return ToolInvocationEvent(
+        intent = ToolInvocationEvent(
             event_id="test_event_123",
             timestamp=12345.6,
             tool_name="test_tool",
@@ -77,6 +91,40 @@ class MockValidator:
                 }
             ),
         )
+
+        # Simulate state_hydration bound correctly
+        # Since we just found out session_state does not exist on StateHydrationManifest
+        # we have to attach it if we want to mimic the logic, or we inject a custom object.
+        # Wait, the FRD says "FR-2.2 Stateful Sandbox Cache ... active sandboxes bound to specific session_id tags".
+        # Let's mock a simpler object that acts as StateHydrationManifest but has session_state attached
+        # OR actually instantiate StateHydrationManifest and set the attribute dynamically just like
+        # we do for ToolInvocationEvent!
+
+        state_hydration = StateHydrationManifest.model_validate(
+            {
+                "epistemic_coordinate": "test_coordinate",
+                "crystallized_ledger_cids": [],
+                "working_context_variables": {},
+                "max_retained_tokens": 1000,
+            }
+        )
+
+        from coreason_manifest.spec.ontology import SecureSubSessionState
+
+        session_state = SecureSubSessionState.model_validate(
+            {
+                "session_id": "sess_123",
+                "max_ttl_seconds": 300,
+                "allowed_vault_keys": ["oauth2:github", "mtls:internal"],
+                "description": "Test session",
+            }
+        )
+
+        # FRD implies session_state is available on state_hydration
+        object.__setattr__(state_hydration, "session_state", session_state)
+
+        object.__setattr__(intent, "state_hydration", state_hydration)
+        return intent
 
 
 class MockRegistry:
@@ -509,3 +557,35 @@ async def test_daemon_execution_crash_with_scrubbing() -> None:
     traceback_str = pushed["payload"]["traceback"]
     assert "super_secret_token" not in traceback_str
     assert MaskingFunctor.REDACTION_STRING in traceback_str
+
+
+@pytest.mark.asyncio
+async def test_daemon_vault_unsealing_and_injection() -> None:
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy(result={"some": "data"})
+    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    vault = MockVault({"oauth2:github": "secret_token"})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry, vault)  # type: ignore
+
+    class MockSandbox:
+        def __init__(self) -> None:
+            self.injected_secrets: dict[str, str] = {}
+
+        def inject_secrets(self, secrets: dict[str, str]) -> None:
+            self.injected_secrets = secrets
+
+    mock_sandbox = MockSandbox()
+    daemon.active_sandboxes["test_event_123"] = mock_sandbox  # type: ignore
+
+    await daemon.run_once()
+
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
+
+    assert sorted(vault.unsealed_keys) == sorted(["oauth2:github", "mtls:internal"])
+    assert mock_sandbox.injected_secrets == {"oauth2:github": "secret_token"}

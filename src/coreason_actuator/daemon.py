@@ -24,7 +24,7 @@ from coreason_manifest.spec.ontology import (
 
 from coreason_actuator.ingress import IPCValidator
 from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, IPCBrokerProtocol
-from coreason_actuator.sandbox import SandboxProviderProtocol
+from coreason_actuator.sandbox import EnterpriseVaultProtocol, SandboxProviderProtocol
 from coreason_actuator.security import MaskingFunctor
 from coreason_actuator.strategies import ExecutionStrategyProtocol
 from coreason_actuator.utils.logger import logger
@@ -54,12 +54,14 @@ class ActuatorDaemon:
         backpressure_policy: BackpressurePolicy,
         execution_strategy: ExecutionStrategyProtocol,
         registry: ActionSpaceRegistryProtocol,
+        vault: EnterpriseVaultProtocol | None = None,
     ) -> None:
         self.broker = broker
         self.validator = validator
         self.backpressure_policy = backpressure_policy
         self.execution_strategy = execution_strategy
         self.registry = registry
+        self.vault = vault
         self.active_tasks_count = 0
         self._is_running = False
         self.active_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -172,6 +174,16 @@ class ActuatorDaemon:
             # Retrieve sandbox if assigned (e.g., dynamically by earlier orchestration/provisioning).
             sandbox = self.active_sandboxes.get(intent.event_id)
             sandbox_pid = sandbox
+
+            # Extract session state from the state_hydration natively bound to intent
+            if hasattr(intent, "state_hydration") and intent.state_hydration is not None:
+                # Based on FR-2.3, if allowed_vault_keys is present, unseal secrets and inject into sandbox
+                session_state = getattr(intent.state_hydration, "session_state", None)
+                if session_state and session_state.allowed_vault_keys and self.vault:
+                    logger.info(f"Unsealing secrets for keys: {session_state.allowed_vault_keys}")
+                    secrets = self.vault.unseal(session_state.allowed_vault_keys)
+                    if sandbox:
+                        sandbox.inject_secrets(secrets)
 
             if not manifest.is_preemptible:
                 inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))
