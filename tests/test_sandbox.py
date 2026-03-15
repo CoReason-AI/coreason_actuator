@@ -10,7 +10,6 @@
 
 import hashlib
 from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 from coreason_manifest.spec.ontology import (
@@ -87,34 +86,37 @@ def test_sandbox_factory_invalid() -> None:
         SandboxProviderFactory.create(state)
 
 
-def test_wasm_provider_methods() -> None:
+@pytest.mark.asyncio
+async def test_wasm_provider_methods() -> None:
     provider = WasmSandboxProvider()
     state = create_partition_state("wasm32-wasi")
     provider.provision(state)
     provider.inject_secrets({"secret": "value"})
     res = provider.execute(b"test")
     assert res == "WASM execution simulated"
-    provider.teardown()
+    await provider.teardown()
 
 
-def test_riscv_provider_methods() -> None:
+@pytest.mark.asyncio
+async def test_riscv_provider_methods() -> None:
     provider = RiscvZkvmSandboxProvider()
     state = create_partition_state("riscv32-zkvm")
     provider.provision(state)
     provider.inject_secrets({"secret": "value"})
     res = provider.execute(b"test")
     assert res == "RISC-V execution simulated"
-    provider.teardown()
+    await provider.teardown()
 
 
-def test_bpf_provider_methods() -> None:
+@pytest.mark.asyncio
+async def test_bpf_provider_methods() -> None:
     provider = BpfSandboxProvider()
     state = create_partition_state("bpf")
     provider.provision(state)
     provider.inject_secrets({"secret": "value"})
     res = provider.execute(b"test")
     assert res == "BPF execution simulated"
-    provider.teardown()
+    await provider.teardown()
 
 
 def test_stateful_sandbox_cache_warm_start() -> None:
@@ -134,7 +136,8 @@ def test_stateful_sandbox_cache_warm_start() -> None:
     assert len(cache._cache) == 1
 
 
-def test_stateful_sandbox_cache_eviction() -> None:
+@pytest.mark.asyncio
+async def test_stateful_sandbox_cache_eviction() -> None:
     cache = StatefulSandboxCache(max_size=2)
     partition_state = create_partition_state("wasm32-wasi")
 
@@ -142,8 +145,10 @@ def test_stateful_sandbox_cache_eviction() -> None:
     session2 = SecureSubSessionState(session_id="s2", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
     session3 = SecureSubSessionState(session_id="s3", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
 
+    from unittest.mock import AsyncMock
+
     p1 = cache.get_or_create(session1, partition_state)
-    p1.teardown = MagicMock()  # type: ignore
+    p1.teardown = AsyncMock()  # type: ignore
 
     _ = cache.get_or_create(session2, partition_state)
 
@@ -156,21 +161,62 @@ def test_stateful_sandbox_cache_eviction() -> None:
     assert "s1" not in cache._cache
     assert "s2" in cache._cache
     assert "s3" in cache._cache
+
+    # Wait for the background task of teardown to finish
+    import asyncio
+
+    await asyncio.sleep(0.01)
+
     p1.teardown.assert_called_once()  # Eviction calls teardown
 
 
-def test_stateful_sandbox_cache_teardown_all() -> None:
+@pytest.mark.asyncio
+async def test_stateful_sandbox_cache_teardown_all() -> None:
     cache = StatefulSandboxCache(max_size=2)
     partition_state = create_partition_state("wasm32-wasi")
 
     session1 = SecureSubSessionState(session_id="s1", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
-    p1 = cache.get_or_create(session1, partition_state)
-    p1.teardown = MagicMock()  # type: ignore
+    from unittest.mock import AsyncMock
 
-    cache.teardown_all()
+    p1 = cache.get_or_create(session1, partition_state)
+    p1.teardown = AsyncMock()  # type: ignore
+
+    await cache.teardown_all()
 
     assert len(cache._cache) == 0
     p1.teardown.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_stateful_sandbox_cache_eviction_no_loop() -> None:
+    # We simulate a runtime error when getting the event loop
+    cache = StatefulSandboxCache(max_size=2)
+    partition_state = create_partition_state("wasm32-wasi")
+
+    session1 = SecureSubSessionState(session_id="s1", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
+    session2 = SecureSubSessionState(session_id="s2", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
+    session3 = SecureSubSessionState(session_id="s3", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
+
+    from unittest.mock import AsyncMock, patch
+
+    p1 = cache.get_or_create(session1, partition_state)
+    p1.teardown = AsyncMock()  # type: ignore
+
+    _ = cache.get_or_create(session2, partition_state)
+
+    assert len(cache._cache) == 2
+
+    # Force RuntimeError from get_running_loop
+    with patch("asyncio.get_running_loop", side_effect=RuntimeError("no loop")):
+        _ = cache.get_or_create(session3, partition_state)
+
+    assert len(cache._cache) == 2
+    assert "s1" not in cache._cache
+    assert "s2" in cache._cache
+    assert "s3" in cache._cache
+
+    # Since there was no loop, teardown was never scheduled
+    p1.teardown.assert_not_called()
 
 
 def test_verify_bytecode_safety_success() -> None:

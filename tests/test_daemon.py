@@ -89,16 +89,21 @@ class MockExecutionStrategy:
         _ = (intent, manifest, sandbox_pid)
         if self.should_crash:
             raise RuntimeError("Mock execution crash")
+        # Add a sleep so we have time to cancel in preemption tests
+        await asyncio.sleep(0.01)
         return self.result
 
 
-def create_mock_manifest(tool_name: str = "test_tool") -> ToolManifest:
+def create_mock_manifest(tool_name: str = "test_tool", is_preemptible: bool = False) -> ToolManifest:
+    from coreason_manifest.spec.ontology import PermissionBoundaryPolicy, SideEffectProfile
+
     return ToolManifest(
         tool_name=tool_name,
         description="A mock tool",
         input_schema={"type": "object"},
-        side_effects={"is_idempotent": True, "mutates_state": False},
-        permissions={"network_access": False, "file_system_mutation_forbidden": True},
+        side_effects=SideEffectProfile(is_idempotent=True, mutates_state=False),
+        permissions=PermissionBoundaryPolicy(network_access=False, file_system_mutation_forbidden=True),
+        is_preemptible=is_preemptible,
     )
 
 
@@ -113,6 +118,9 @@ async def test_daemon_successful_dispatch() -> None:
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
     await daemon.run_once()
+
+    # Wait for background task to finish
+    await asyncio.sleep(0.05)
 
     assert len(broker.pushed) == 1
     assert broker.pushed[0]["type"] == "observation"
@@ -193,6 +201,8 @@ async def test_daemon_execution_success() -> None:
 
     await daemon.run_once()
 
+    await asyncio.sleep(0.05)
+
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
     assert pushed["type"] == "observation"
@@ -212,6 +222,8 @@ async def test_daemon_execution_crash() -> None:
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
     await daemon.run_once()
+
+    await asyncio.sleep(0.05)
 
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
@@ -233,6 +245,7 @@ async def test_daemon_missing_manifest() -> None:
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
     await daemon.run_once()
+    await asyncio.sleep(0.01)
 
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
@@ -240,5 +253,96 @@ async def test_daemon_missing_manifest() -> None:
     # it yields a JSONRPCErrorResponseState indicating Method not found.
     assert pushed["jsonrpc"] == "2.0"
     assert pushed["id"] == "1"
+    # This responds immediately
     assert pushed["error"]["code"] == -32601
     assert "Method not found: Tool 'test_tool' missing from the registry." in pushed["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_daemon_preemption_preemptible_task() -> None:
+    broker = MockBroker(
+        [
+            {"jsonrpc": "2.0", "method": "test", "id": "1"},  # Intent
+            {"type": "barge_in", "target_event_id": "test_event_123"},  # Preemption Signal
+        ]
+    )
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy(result={"some": "data"})
+    # Create manifest with is_preemptible=True
+    registry = MockRegistry({"test_tool": create_mock_manifest(is_preemptible=True)})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    # Run once to pull the intent
+    await daemon.run_once()
+    await asyncio.sleep(0.001)
+    await asyncio.sleep(0.001)
+    assert daemon.active_tasks_count == 1
+
+    # Run again to pull the preemption signal
+    await daemon.run_once()
+
+    # Wait for background task to resolve its cancellation
+    await asyncio.sleep(0.05)
+
+    # It should have eradicated it
+    assert len(broker.pushed) == 1
+    pushed = broker.pushed[0]
+    assert pushed["type"] == "observation"
+    assert pushed["payload"]["execution_status"] == "preempted"
+    assert pushed["payload"]["eradicated"] is True
+
+
+@pytest.mark.asyncio
+async def test_daemon_preemption_no_active_task() -> None:
+    broker = MockBroker(
+        [
+            {"type": "barge_in", "target_event_id": "test_event_123"}  # Preemption Signal
+        ]
+    )
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy(result={"some": "data"})
+    registry = MockRegistry({})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    # Run once to pull the preemption signal, task is not active
+    await daemon.run_once()
+    assert daemon.active_tasks_count == 0
+
+
+@pytest.mark.asyncio
+async def test_daemon_preemption_non_preemptible_task() -> None:
+    broker = MockBroker(
+        [
+            {"jsonrpc": "2.0", "method": "test", "id": "1"},  # Intent
+            {"type": "barge_in", "target_event_id": "test_event_123"},  # Preemption Signal
+        ]
+    )
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy(result={"some": "data"})
+    # Create manifest with is_preemptible=False
+    registry = MockRegistry({"test_tool": create_mock_manifest(is_preemptible=False)})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    # Run once to pull the intent
+    await daemon.run_once()
+    await asyncio.sleep(0.001)
+    assert daemon.active_tasks_count == 1
+
+    # Run again to pull the preemption signal
+    await daemon.run_once()
+
+    # Wait for background task to finish executing its logic since it shielded itself
+    await asyncio.sleep(0.05)
+
+    # It should have allowed it to complete
+    assert len(broker.pushed) == 1
+    pushed = broker.pushed[0]
+    assert pushed["type"] == "observation"
+    assert pushed["payload"]["execution_status"] == "completed_under_preemption"
+    assert pushed["payload"]["null_hash"] is True

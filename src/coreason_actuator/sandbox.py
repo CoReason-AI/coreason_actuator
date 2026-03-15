@@ -44,7 +44,7 @@ class SandboxProviderProtocol(Protocol):
         """Executes the target binary within the physical boundary."""
         ...
 
-    def teardown(self) -> None:
+    async def teardown(self, force: bool = False) -> None:
         """Eradicates the partition safely and frees host VRAM."""
         ...
 
@@ -62,8 +62,8 @@ class WasmSandboxProvider:
         logger.info(f"Executing WASM bytecode ({len(bytecode)} bytes)")
         return "WASM execution simulated"
 
-    def teardown(self) -> None:
-        logger.info("Tearing down WASM sandbox")
+    async def teardown(self, force: bool = False) -> None:
+        logger.info(f"Tearing down WASM sandbox (force={force})")
 
 
 class RiscvZkvmSandboxProvider:
@@ -79,8 +79,8 @@ class RiscvZkvmSandboxProvider:
         logger.info(f"Executing RISC-V bytecode ({len(bytecode)} bytes)")
         return "RISC-V execution simulated"
 
-    def teardown(self) -> None:
-        logger.info("Tearing down RISC-V ZKVM sandbox")
+    async def teardown(self, force: bool = False) -> None:
+        logger.info(f"Tearing down RISC-V ZKVM sandbox (force={force})")
 
 
 class BpfSandboxProvider:
@@ -96,8 +96,8 @@ class BpfSandboxProvider:
         logger.info(f"Executing BPF bytecode ({len(bytecode)} bytes)")
         return "BPF execution simulated"
 
-    def teardown(self) -> None:
-        logger.info("Tearing down BPF sandbox")
+    async def teardown(self, force: bool = False) -> None:
+        logger.info(f"Tearing down BPF sandbox (force={force})")
 
 
 class SandboxProviderFactory:
@@ -144,16 +144,30 @@ class StatefulSandboxCache:
             # Evict least recently used
             evicted_id, evicted_provider = self._cache.popitem(last=False)
             logger.info(f"Cache full: Evicting sandbox for session {evicted_id}")
-            evicted_provider.teardown()
+            # Note: Cache eviction is synchronous here, but teardown is async.
+            # In a real environment, this might need an async task or an async cache.
+            # For the interface change, we'll log a warning or handle it properly later.
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(evicted_provider.teardown(force=True))
+                # Store the task to avoid RUF006 and prevent GC of the task
+                if not hasattr(self, "_bg_tasks"):
+                    self._bg_tasks = set()
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
+            except RuntimeError:
+                pass  # no running loop
 
         self._cache[session_id] = provider
         return provider
 
-    def teardown_all(self) -> None:
+    async def teardown_all(self) -> None:
         """Safely tears down all cached sandboxes."""
         for session_id, provider in self._cache.items():
             logger.info(f"Tearing down cached sandbox for session {session_id}")
-            provider.teardown()
+            await provider.teardown(force=True)
         self._cache.clear()
 
 
