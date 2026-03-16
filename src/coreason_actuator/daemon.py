@@ -24,7 +24,13 @@ from coreason_manifest.spec.ontology import (
 
 from coreason_actuator.ingress import IPCValidator
 from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, IPCBrokerProtocol
-from coreason_actuator.sandbox import EnterpriseVaultProtocol, SandboxProviderProtocol
+from coreason_actuator.sandbox import (
+    EnterpriseVaultProtocol,
+    SandboxProviderProtocol,
+    StatefulSandboxCache,
+    enforce_sandbox_immutability,
+    verify_network_access,
+)
 from coreason_actuator.security import MaskingFunctor
 from coreason_actuator.semantic_extractor import SemanticExtractor
 from coreason_actuator.strategies import ExecutionStrategyProtocol
@@ -57,6 +63,7 @@ class ActuatorDaemon:
         registry: ActionSpaceRegistryProtocol,
         vault: EnterpriseVaultProtocol | None = None,
         semantic_extractor: SemanticExtractor | None = None,
+        sandbox_cache: StatefulSandboxCache | None = None,
     ) -> None:
         self.broker = broker
         self.validator = validator
@@ -65,6 +72,7 @@ class ActuatorDaemon:
         self.registry = registry
         self.vault = vault
         self.semantic_extractor = semantic_extractor
+        self.sandbox_cache = sandbox_cache
         self.active_tasks_count = 0
         self._is_running = False
         self.active_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -176,17 +184,29 @@ class ActuatorDaemon:
             # Execute Do-Operator
             # Retrieve sandbox if assigned (e.g., dynamically by earlier orchestration/provisioning).
             sandbox = self.active_sandboxes.get(intent.event_id)
-            sandbox_pid = sandbox
 
             # Extract session state from the state_hydration natively bound to intent
             if hasattr(intent, "state_hydration") and intent.state_hydration is not None:
-                # Based on FR-2.3, if allowed_vault_keys is present, unseal secrets and inject into sandbox
                 session_state = getattr(intent.state_hydration, "session_state", None)
-                if session_state and session_state.allowed_vault_keys and self.vault:
+                partition_state = getattr(intent.state_hydration, "partition_state", None)
+
+                # Provision or get sandbox via StatefulSandboxCache if available
+                if self.sandbox_cache and session_state and partition_state:
+                    sandbox = self.sandbox_cache.get_or_create(session_state, partition_state)
+                    self.active_sandboxes[intent.event_id] = sandbox
+
+                    # Apply Dual-Evaluation Permission Boundary and immutability checks
+                    verify_network_access(manifest, partition_state, sandbox)
+                    enforce_sandbox_immutability(manifest, sandbox)
+
+                # Based on FR-2.3, if allowed_vault_keys is present, unseal secrets and inject into sandbox
+                if session_state and getattr(session_state, "allowed_vault_keys", None) and self.vault:
                     logger.info(f"Unsealing secrets for keys: {session_state.allowed_vault_keys}")
                     secrets = self.vault.unseal(session_state.allowed_vault_keys)
                     if sandbox:
                         sandbox.inject_secrets(secrets)
+
+            sandbox_pid = sandbox
 
             if not manifest.is_preemptible:
                 inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))
