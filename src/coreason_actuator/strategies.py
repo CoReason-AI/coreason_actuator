@@ -51,33 +51,42 @@ class DistributedLockProtocol(Protocol):
         yield  # pragma: no cover
 
 
-class MemoryDistributedLock:
-    """In-memory implementation of a distributed lock using asyncio.Lock."""
+class PostgresDistributedLock:
+    """Postgres advisory lock implementation for multi-process distributed synchronization."""
 
-    def __init__(self) -> None:
-        self._locks: dict[str, asyncio.Lock] = {}
+    def __init__(self, pool: Any) -> None:
+        # pool is expected to be an asyncpg.Pool
+        self.pool = pool
+
+    def _hash_lock_key(self, lock_key: str) -> int:
+        """Convert a string lock key into a 64-bit integer for pg_advisory_lock."""
+        # Using a stable hash to get an int64 for Postgres
+        hash_bytes = hashlib.sha256(lock_key.encode("utf-8")).digest()
+        # Take first 8 bytes and convert to signed 64-bit int
+        return int.from_bytes(hash_bytes[:8], byteorder="big", signed=True)
 
     @asynccontextmanager
     async def acquire(self, lock_key: str, ttl: int | None = None) -> AsyncIterator[Any]:
-        if lock_key not in self._locks:
-            self._locks[lock_key] = asyncio.Lock()
+        lock_id = self._hash_lock_key(lock_key)
 
-        lock = self._locks[lock_key]
+        async with self.pool.acquire() as conn:
+            if ttl is not None:
+                # To simulate acquisition timeout / TTL, we would normally use try_advisory_lock
+                # with a timeout loop, or simply set lock_timeout locally.
+                timeout_ms = int(ttl)
+                await conn.execute(f"SET LOCAL lock_timeout = '{timeout_ms}ms'")
 
-        if ttl is not None:
-            # We would normally implement TTL mechanics, but for a memory lock simulation,
-            # we simply acquire the lock. For timeout when acquiring, we use wait_for.
             try:
-                await asyncio.wait_for(lock.acquire(), timeout=float(ttl) / 1000.0)
-            except TimeoutError as err:
-                raise TimeoutError(f"Failed to acquire lock for {lock_key} within TTL {ttl}ms") from err
-        else:
-            await lock.acquire()
+                await conn.execute("SELECT pg_advisory_lock($1)", lock_id)
+            except Exception as err:
+                if "lock_not_available" in str(err).lower() or "timeout" in str(err).lower():
+                    raise TimeoutError(f"Failed to acquire lock for {lock_key} within TTL {ttl}ms") from err
+                raise err
 
-        try:
-            yield
-        finally:
-            lock.release()
+            try:
+                yield
+            finally:
+                await conn.execute("SELECT pg_advisory_unlock($1)", lock_id)
 
 
 class NativeRegistryProtocol(Protocol):
