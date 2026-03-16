@@ -9,6 +9,7 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import re
+from typing import Any
 
 
 class MaskingFunctor:
@@ -37,10 +38,23 @@ class MaskingFunctor:
             pattern_str = "|".join(map(re.escape, self._secrets))
             self._pattern = re.compile(pattern_str)
 
-    def redact(self, text: str) -> str:
+    def redact(self, payload: Any) -> Any:
         """
-        Replaces all occurrences of the loaded secrets in the text with the redaction string.
+        Recursively replaces all occurrences of the loaded secrets in strings,
+        dictionary keys, and dictionary values with the redaction string.
         """
-        if not text or not self._pattern:
-            return text
-        return self._pattern.sub(self.REDACTION_STRING, text)
+        if not self._pattern:
+            return payload
+
+        if isinstance(payload, str):
+            if not payload:
+                return payload
+            return self._pattern.sub(self.REDACTION_STRING, payload)
+
+        if isinstance(payload, dict):
+            return {self.redact(k): self.redact(v) for k, v in payload.items()}
+
+        if isinstance(payload, list):
+            return [self.redact(item) for item in payload]
+
+        return payload

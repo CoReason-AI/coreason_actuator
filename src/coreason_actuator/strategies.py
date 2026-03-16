@@ -25,7 +25,7 @@ from coreason_manifest.spec.ontology import (
     ToolManifest,
 )
 from coreason_manifest.utils.algebra import verify_ast_safety
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from coreason_actuator.interfaces import IPCBrokerProtocol, KinematicBrowserProtocol
 from coreason_actuator.semantic_extractor import TensorStorageProtocol
@@ -49,6 +49,35 @@ class DistributedLockProtocol(Protocol):
         _ = lock_key  # pragma: no cover
         _ = ttl  # pragma: no cover
         yield  # pragma: no cover
+
+
+class MemoryDistributedLock:
+    """In-memory implementation of a distributed lock using asyncio.Lock."""
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    @asynccontextmanager
+    async def acquire(self, lock_key: str, ttl: int | None = None) -> AsyncIterator[Any]:
+        if lock_key not in self._locks:
+            self._locks[lock_key] = asyncio.Lock()
+
+        lock = self._locks[lock_key]
+
+        if ttl is not None:
+            # We would normally implement TTL mechanics, but for a memory lock simulation,
+            # we simply acquire the lock. For timeout when acquiring, we use wait_for.
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=float(ttl) / 1000.0)
+            except TimeoutError as err:
+                raise TimeoutError(f"Failed to acquire lock for {lock_key} within TTL {ttl}ms") from err
+        else:
+            await lock.acquire()
+
+        try:
+            yield
+        finally:
+            lock.release()
 
 
 class NativeRegistryProtocol(Protocol):
@@ -148,8 +177,13 @@ class NativeExecutionStrategy:
         # Wrap in Tenacity retry loop for network faults.
         if is_idempotent:
             # We define a retry-wrapped function
-            # Retrying on general Exceptions for demonstration. In a real scenario, this might be NetworkError etc.
-            @retry(wait=wait_exponential(multiplier=1, min=1, max=10), stop=stop_after_attempt(3), reraise=True)
+            # Retrying on specific transient faults
+            @retry(
+                wait=wait_exponential(multiplier=1, min=1, max=10),
+                stop=stop_after_attempt(3),
+                retry=retry_if_exception_type((ConnectionError, TimeoutError)),
+                reraise=True,
+            )
             async def _retry_execute() -> Any:
                 return await _do_execute()
 

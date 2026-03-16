@@ -8,6 +8,7 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
+import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -34,6 +35,7 @@ from hypothesis import strategies as st
 from coreason_actuator.strategies import (
     KinematicExecutionStrategy,
     MCPClientStrategy,
+    MemoryDistributedLock,
     NativeExecutionStrategy,
 )
 
@@ -122,6 +124,40 @@ def create_mock_manifest(mutates_state: bool = False, is_idempotent: bool = Fals
         sla=sla,
         is_preemptible=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_memory_distributed_lock_acquire() -> None:
+    lock = MemoryDistributedLock()
+    async with lock.acquire("test_key", ttl=1000):
+        assert "test_key" in lock._locks
+        assert lock._locks["test_key"].locked()
+    assert not lock._locks["test_key"].locked()
+
+
+@pytest.mark.asyncio
+async def test_memory_distributed_lock_acquire_timeout() -> None:
+    lock = MemoryDistributedLock()
+
+    async def worker1() -> None:
+        async with lock.acquire("test_key", ttl=1000):
+            await asyncio.sleep(0.1)
+
+    async def worker2() -> None:
+        with pytest.raises(TimeoutError, match="Failed to acquire lock for test_key within TTL"):
+            async with lock.acquire("test_key", ttl=10):
+                pass
+
+    await asyncio.gather(worker1(), worker2())
+
+
+@pytest.mark.asyncio
+async def test_memory_distributed_lock_acquire_no_ttl() -> None:
+    lock = MemoryDistributedLock()
+    async with lock.acquire("test_key_no_ttl"):
+        assert "test_key_no_ttl" in lock._locks
+        assert lock._locks["test_key_no_ttl"].locked()
+    assert not lock._locks["test_key_no_ttl"].locked()
 
 
 @pytest.mark.asyncio
@@ -252,7 +288,7 @@ async def test_native_execution_strategy_idempotency_retry() -> None:
         nonlocal call_count
         call_count += 1
         if call_count < 2:
-            raise RuntimeError("Transient network error")
+            raise ConnectionError("Transient network error")
         return "success_on_retry"
 
     mock_callable = AsyncMock(side_effect=side_effect)
@@ -283,6 +319,43 @@ async def test_native_execution_strategy_idempotency_retry() -> None:
 
     assert result == "success_on_retry"
     assert mock_callable.call_count == 2
+    assert len(lock_manager.acquired_locks) == 0
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_idempotency_no_retry_on_other_errors() -> None:
+    # We simulate a failure that is NOT a ConnectionError or TimeoutError
+    call_count = 0
+
+    async def side_effect(*_args: Any, **_kwargs: Any) -> Any:
+        nonlocal call_count
+        call_count += 1
+        raise ValueError("Some other error")
+
+    mock_callable = AsyncMock(side_effect=side_effect)
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"arg1": "safe_value"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest(is_idempotent=True)
+
+    import tenacity.nap
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(tenacity.nap, "sleep", MagicMock())
+        with pytest.raises(ValueError, match="Some other error"):
+            await strategy.execute(intent, manifest, sandbox_pid=None)
+
+    # Because ValueError is not in the retry_if_exception_type list, it should only be called once
+    assert mock_callable.call_count == 1
     assert len(lock_manager.acquired_locks) == 0
 
 
