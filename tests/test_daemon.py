@@ -589,3 +589,93 @@ async def test_daemon_vault_unsealing_and_injection() -> None:
 
     assert sorted(vault.unsealed_keys) == sorted(["oauth2:github", "mtls:internal"])
     assert mock_sandbox.injected_secrets == {"oauth2:github": "secret_token"}
+
+
+@pytest.mark.asyncio
+async def test_daemon_semantic_truncation_routing() -> None:
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+
+    # Simulate SemanticExtractor behavior
+    truncated_result = {
+        "status": "success",
+        "data": [1, 2, 3],
+        "truncation_metadata": {
+            "semantic_truncation_applied": True,
+            "items_omitted": 997,
+        },
+    }
+
+    strategy = MockExecutionStrategy(result=truncated_result)
+    registry = MockRegistry({"test_tool": create_mock_manifest()})
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    await daemon.run_once()
+
+    for _ in range(20):
+        if len(broker.pushed) >= 1:
+            break
+        await asyncio.sleep(0.05)
+
+    assert len(broker.pushed) == 1
+    pushed = broker.pushed[0]
+
+    # Assert it was properly routed to root ObservationEvent
+    assert pushed["type"] == "observation"
+    assert "truncation_metadata" in pushed
+    assert pushed["truncation_metadata"]["semantic_truncation_applied"] is True
+    assert pushed["truncation_metadata"]["items_omitted"] == 997
+
+    # Assert it was removed from payload body to avoid schema collisions
+    assert "truncation_metadata" not in pushed["payload"]
+    assert "truncation_metadata" not in pushed["payload"]["result"]
+
+
+@pytest.mark.asyncio
+async def test_daemon_semantic_truncation_routing_payload() -> None:
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1", "state_hydration": {}}])
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+
+    # To cover line 222 in daemon.py, we need truncation_metadata directly in `payload`.
+    from coreason_actuator.security import MaskingFunctor
+
+    class MockMaskingFunctor(MaskingFunctor):
+        def redact(self, text: str) -> str:
+            return text
+
+    def mock_scrub_payload(data: Any, masking_functor: MaskingFunctor) -> Any:
+        _ = masking_functor
+        # Mutate the dictionary to add the required key to reach line 222
+        if isinstance(data, dict):
+            data["truncation_metadata"] = {"semantic_truncation_applied": True, "items_omitted": 123}
+        return data
+
+    import coreason_actuator.daemon
+
+    original_scrub_payload = coreason_actuator.daemon.scrub_payload
+    coreason_actuator.daemon.scrub_payload = mock_scrub_payload
+
+    try:
+        strategy = MockExecutionStrategy(result="data")
+        registry = MockRegistry({"test_tool": create_mock_manifest()})
+
+        daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+        daemon.set_masking_functor(MockMaskingFunctor([]))
+
+        await daemon.run_once()
+
+        for _ in range(20):
+            if len(broker.pushed) >= 1:
+                break
+            await asyncio.sleep(0.05)
+
+        assert len(broker.pushed) == 1
+        pushed = broker.pushed[0]
+        assert "truncation_metadata" in pushed
+        assert pushed["truncation_metadata"]["items_omitted"] == 123
+        assert "truncation_metadata" not in pushed["payload"]
+    finally:
+        coreason_actuator.daemon.scrub_payload = original_scrub_payload
