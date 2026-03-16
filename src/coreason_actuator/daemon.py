@@ -202,7 +202,7 @@ class ActuatorDaemon:
                 # Based on FR-2.3, if allowed_vault_keys is present, unseal secrets and inject into sandbox
                 if session_state and getattr(session_state, "allowed_vault_keys", None) and self.vault:
                     logger.info(f"Unsealing secrets for keys: {session_state.allowed_vault_keys}")
-                    secrets = self.vault.unseal(session_state.allowed_vault_keys)
+                    secrets = await self.vault.unseal(session_state.allowed_vault_keys)
                     if sandbox:
                         sandbox.inject_secrets(secrets)
 

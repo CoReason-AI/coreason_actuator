@@ -9,9 +9,7 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import hashlib
-import json
 import subprocess
-import urllib.error
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -42,42 +40,44 @@ class MockVault:
     def __init__(self, secrets: dict[str, str]) -> None:
         self.secrets = secrets
 
-    def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
+    async def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
         _ = auth_requirements
         return self.secrets
 
 
-@patch("urllib.request.urlopen")
-def test_hashicorp_vault(mock_urlopen: MagicMock) -> None:
+@pytest.mark.asyncio
+@patch("httpx.AsyncClient.get")
+async def test_hashicorp_vault(mock_get: MagicMock) -> None:
     # Setup mock response
     mock_response = MagicMock()
-    mock_response.read.return_value = json.dumps({"data": {"real_secret_key": "real_secret_value"}}).encode("utf-8")
-    mock_response.__enter__.return_value = mock_response
-    mock_urlopen.return_value = mock_response
+    mock_response.json.return_value = {"data": {"real_secret_key": "real_secret_value"}}
+    mock_response.raise_for_status.return_value = None
+    mock_get.return_value = mock_response
 
     vault = HashiCorpVault(vault_addr="http://localhost:8200", vault_token="test-token")  # noqa: S106
-    secrets = vault.unseal(["oauth2:github"])
+    secrets = await vault.unseal(["oauth2:github"])
     assert secrets == {"real_secret_key": "real_secret_value"}
 
     # Verify the request was made correctly
-    mock_urlopen.assert_called_once()
-    request = mock_urlopen.call_args[0][0]
-    assert request.full_url == "http://localhost:8200/oauth2:github"
-    assert request.get_header("X-vault-token") == "test-token"
+    mock_get.assert_called_once_with("http://localhost:8200/oauth2:github", headers={"X-Vault-Token": "test-token"})
 
 
-@patch("urllib.request.urlopen")
-def test_hashicorp_vault_error(mock_urlopen: MagicMock) -> None:
-    mock_urlopen.side_effect = urllib.error.URLError("Network error")
+@pytest.mark.asyncio
+@patch("httpx.AsyncClient.get")
+async def test_hashicorp_vault_error(mock_get: MagicMock) -> None:
+    import httpx
+
+    mock_get.side_effect = httpx.RequestError("Network error")
 
     vault = HashiCorpVault(vault_addr="http://localhost:8200", vault_token="test-token")  # noqa: S106
-    with pytest.raises(RuntimeError, match="Vault communication failed: <urlopen error Network error>"):
-        vault.unseal(["oauth2:github"])
+    with pytest.raises(RuntimeError, match="Vault communication failed: Network error"):
+        await vault.unseal(["oauth2:github"])
 
 
-def test_vault_protocol_mock() -> None:
+@pytest.mark.asyncio
+async def test_vault_protocol_mock() -> None:
     vault: EnterpriseVaultProtocol = MockVault({"key": "val"})
-    secrets = vault.unseal(["oauth2:github"])
+    secrets = await vault.unseal(["oauth2:github"])
     assert secrets == {"key": "val"}
 
 
@@ -137,6 +137,8 @@ async def test_wasm_provider_methods(mock_run: MagicMock) -> None:
     assert "--tmpfs" in provider.bwrap_cmd_array
     assert "/run/secrets" in provider.bwrap_cmd_array
 
+    # Reset mock since apply_network_egress_rules uses subprocess.run
+    mock_run.reset_mock()
     res = provider.execute(b"test")
     assert res == "WASM execution mock success"
 
@@ -176,6 +178,8 @@ async def test_riscv_provider_methods(mock_run: MagicMock) -> None:
     provider.inject_secrets({"secret": "value"})
     assert "--tmpfs" in provider.bwrap_cmd_array
 
+    # Reset mock since apply_network_egress_rules uses subprocess.run
+    mock_run.reset_mock()
     res = provider.execute(b"test")
     assert res == "RISC-V execution mock success"
 
@@ -215,6 +219,8 @@ async def test_bpf_provider_methods(mock_run: MagicMock) -> None:
     provider.inject_secrets({"secret": "value"})
     assert "--tmpfs" in provider.bwrap_cmd_array
 
+    # Reset mock since apply_network_egress_rules uses subprocess.run
+    mock_run.reset_mock()
     res = provider.execute(b"test")
     assert res == "BPF execution mock success"
 

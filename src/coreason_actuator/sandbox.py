@@ -12,10 +12,9 @@ import collections
 import hashlib
 import json
 import subprocess
-import urllib.error
-import urllib.request
 from typing import Any, Protocol
 
+import httpx
 from coreason_manifest.spec.ontology import (
     EphemeralNamespacePartitionState,
     SecureSubSessionState,
@@ -28,7 +27,7 @@ from coreason_actuator.utils.logger import logger
 class EnterpriseVaultProtocol(Protocol):
     """Protocol for the Enterprise Secret Manager."""
 
-    def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
+    async def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
         """Dynamically parses auth_requirements and retrieves secrets."""
         ...
 
@@ -40,29 +39,30 @@ class HashiCorpVault:
         self.vault_addr = vault_addr
         self.vault_token = vault_token
 
-    def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
+    async def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
         """
         Dynamically parses auth_requirements and retrieves secrets.
         """
         logger.info(f"Unsealing secrets via HashiCorp Vault at {self.vault_addr} for {auth_requirements}")
 
         aggregated_secrets: dict[str, str] = {}
-        for req in auth_requirements:
-            url = f"{self.vault_addr.rstrip('/')}/{req}"
-            request = urllib.request.Request(url)  # noqa: S310
-            request.add_header("X-Vault-Token", self.vault_token)
+        async with httpx.AsyncClient() as client:
+            for req in auth_requirements:
+                url = f"{self.vault_addr.rstrip('/')}/{req}"
+                headers = {"X-Vault-Token": self.vault_token}
 
-            try:
-                with urllib.request.urlopen(request) as response:  # noqa: S310
-                    data = json.loads(response.read().decode("utf-8"))
+                try:
+                    response = await client.get(url, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
                     # We assume the secret data is either in the root or in a 'data' envelope
                     if isinstance(data, dict):
                         secret_data = data.get("data", data)
                         if isinstance(secret_data, dict):
                             aggregated_secrets.update({k: v for k, v in secret_data.items() if isinstance(v, str)})
-            except (urllib.error.URLError, json.JSONDecodeError) as e:
-                logger.error(f"Failed to fetch secrets for {req}: {e}")
-                raise RuntimeError(f"Vault communication failed: {e}") from e
+                except (httpx.RequestError, httpx.HTTPStatusError, json.JSONDecodeError) as e:
+                    logger.error(f"Failed to fetch secrets for {req}: {e}")
+                    raise RuntimeError(f"Vault communication failed: {e}") from e
 
         return aggregated_secrets
 
@@ -160,9 +160,22 @@ class WasmSandboxProvider:
 
     def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
         logger.info(f"Applying network egress rules for WASM sandbox. Allowed domains: {allowed_domains}")
+        try:
+            subprocess.run(["iptables", "-F", "OUTPUT"], check=False, capture_output=True)  # noqa: S607
+            subprocess.run(["iptables", "-P", "OUTPUT", "DROP"], check=False, capture_output=True)  # noqa: S607
+            subprocess.run(["iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"], check=False, capture_output=True)  # noqa: S607
+            for domain in allowed_domains:
+                cmd = ["iptables", "-A", "OUTPUT", "-d", domain, "-j", "ACCEPT"]
+                subprocess.run(cmd, check=False, capture_output=True)  # noqa: S603
+        except Exception as e:  # pragma: no cover
+            logger.error(f"Failed to apply iptables rules: {e}")  # pragma: no cover
 
     def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
         logger.info(f"Enforcing WASM filesystem immutability with exemptions: {tmpfs_exemptions}")
+        self.bwrap_cmd_array.extend(["--ro-bind", "/", "/"])
+        if tmpfs_exemptions:
+            for path in tmpfs_exemptions:
+                self.bwrap_cmd_array.extend(["--tmpfs", path])
 
 
 class RiscvZkvmSandboxProvider:
@@ -229,9 +242,22 @@ class RiscvZkvmSandboxProvider:
 
     def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
         logger.info(f"Applying network egress rules for RISC-V ZKVM sandbox. Allowed domains: {allowed_domains}")
+        try:
+            subprocess.run(["iptables", "-F", "OUTPUT"], check=False, capture_output=True)  # noqa: S607
+            subprocess.run(["iptables", "-P", "OUTPUT", "DROP"], check=False, capture_output=True)  # noqa: S607
+            subprocess.run(["iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"], check=False, capture_output=True)  # noqa: S607
+            for domain in allowed_domains:
+                cmd = ["iptables", "-A", "OUTPUT", "-d", domain, "-j", "ACCEPT"]
+                subprocess.run(cmd, check=False, capture_output=True)  # noqa: S603
+        except Exception as e:  # pragma: no cover
+            logger.error(f"Failed to apply iptables rules: {e}")  # pragma: no cover
 
     def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
         logger.info(f"Enforcing RISC-V filesystem immutability with exemptions: {tmpfs_exemptions}")
+        self.bwrap_cmd_array.extend(["--ro-bind", "/", "/"])
+        if tmpfs_exemptions:
+            for path in tmpfs_exemptions:
+                self.bwrap_cmd_array.extend(["--tmpfs", path])
 
 
 class BpfSandboxProvider:
@@ -302,9 +328,22 @@ class BpfSandboxProvider:
 
     def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
         logger.info(f"Applying network egress rules for BPF sandbox. Allowed domains: {allowed_domains}")
+        try:
+            subprocess.run(["iptables", "-F", "OUTPUT"], check=False, capture_output=True)  # noqa: S607
+            subprocess.run(["iptables", "-P", "OUTPUT", "DROP"], check=False, capture_output=True)  # noqa: S607
+            subprocess.run(["iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"], check=False, capture_output=True)  # noqa: S607
+            for domain in allowed_domains:
+                cmd = ["iptables", "-A", "OUTPUT", "-d", domain, "-j", "ACCEPT"]
+                subprocess.run(cmd, check=False, capture_output=True)  # noqa: S603
+        except Exception as e:  # pragma: no cover
+            logger.error(f"Failed to apply iptables rules: {e}")  # pragma: no cover
 
     def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
         logger.info(f"Enforcing BPF filesystem immutability with exemptions: {tmpfs_exemptions}")
+        self.bwrap_cmd_array.extend(["--ro-bind", "/", "/"])
+        if tmpfs_exemptions:
+            for path in tmpfs_exemptions:
+                self.bwrap_cmd_array.extend(["--tmpfs", path])
 
 
 class SandboxProviderFactory:

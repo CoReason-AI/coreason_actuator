@@ -13,9 +13,11 @@ authors = [
 ]
 dependencies = [
     "coreason-manifest>=0.26.1",
+    "httpx>=0.28.1",
     "loguru>=0.7.2",
     "pydantic>=2.12.5",
     "tenacity>=9.1.4",
+    "typer>=0.24.1",
 ]
 license = { file = "LICENSE" }
 classifiers = [
