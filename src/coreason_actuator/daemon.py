@@ -211,6 +211,16 @@ class ActuatorDaemon:
             if self.masking_functor:
                 payload = scrub_payload(payload, self.masking_functor)
 
+            # Extract truncation metadata if present to avoid polluting the payload
+            # and to satisfy structural truncation requirements.
+            truncation_metadata = None
+            if isinstance(result, dict) and "truncation_metadata" in result:
+                # If the result itself contains truncation_metadata (e.g. from SemanticExtractor)
+                truncation_metadata = result.pop("truncation_metadata")
+            elif isinstance(payload, dict) and "truncation_metadata" in payload:
+                # If it's already at the root of the payload dict
+                truncation_metadata = payload.pop("truncation_metadata")
+
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),
                 timestamp=time.time(),
@@ -218,8 +228,16 @@ class ActuatorDaemon:
                 payload=payload,
                 triggering_invocation_id=intent.event_id,
             )
+            if truncation_metadata:
+                object.__setattr__(observation, "truncation_metadata", truncation_metadata)
+
             logger.info(f"Tool {intent.tool_name} executed successfully.")
-            await self.broker.push(observation.model_dump())
+
+            obs_dict = observation.model_dump()
+            if hasattr(observation, "truncation_metadata"):
+                obs_dict["truncation_metadata"] = observation.truncation_metadata
+
+            await self.broker.push(obs_dict)
 
         except asyncio.CancelledError:
             # Task was cancelled and is preemptible
