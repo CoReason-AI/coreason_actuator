@@ -98,17 +98,42 @@ class SandboxProviderProtocol(Protocol):
 class WasmSandboxProvider:
     """WASM sandboxing execution provider (wasm32-wasi)."""
 
+    def __init__(self) -> None:
+        self.partition_id: str | None = None
+        self.bwrap_cmd_array: list[str] = []
+
     def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
         logger.info(f"Provisioning WASM sandbox: {partition_state.partition_id}")
+        self.partition_id = partition_state.partition_id
+        self.bwrap_cmd_array = [
+            "bwrap",
+            "--unshare-pid",
+            "--unshare-mount",
+            "--unshare-ipc",
+        ]
 
     def inject_secrets(self, secrets: dict[str, str]) -> None:
         logger.info(f"Injecting {len(secrets)} secrets into WASM tmpfs")
+        self.bwrap_cmd_array.extend(["--tmpfs", "/run/secrets"])
 
     def execute(self, bytecode: bytes) -> Any:
         logger.info(f"Executing WASM bytecode ({len(bytecode)} bytes) via wasmtime")
+        full_command = [
+            "systemd-run",
+            "--user",
+            "--scope",
+            "-p",
+            "MemoryMax=512M",
+            "-p",
+            "CPUQuota=50%",
+            *self.bwrap_cmd_array,
+            "wasmtime",
+            "-",
+        ]
+
         try:
-            result = subprocess.run(
-                ["wasmtime", "-"],  # noqa: S607
+            result = subprocess.run(  # noqa: S603
+                full_command,
                 input=bytecode,
                 capture_output=True,
                 check=True,
@@ -121,6 +146,17 @@ class WasmSandboxProvider:
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down WASM sandbox (force={force})")
+        if self.partition_id:
+            subprocess.run(  # noqa: S603
+                ["systemctl", "--user", "stop", f"{self.partition_id}.scope"],  # noqa: S607
+                capture_output=True,
+                check=False,
+            )
+        subprocess.run(
+            ["umount", "/run/secrets"],  # noqa: S607
+            capture_output=True,
+            check=False,
+        )
 
     def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
         logger.info(f"Applying network egress rules for WASM sandbox. Allowed domains: {allowed_domains}")
@@ -132,17 +168,41 @@ class WasmSandboxProvider:
 class RiscvZkvmSandboxProvider:
     """RISC-V ZKVM execution provider for generating hardware ZK proofs."""
 
+    def __init__(self) -> None:
+        self.partition_id: str | None = None
+        self.bwrap_cmd_array: list[str] = []
+
     def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
         logger.info(f"Provisioning RISC-V ZKVM sandbox: {partition_state.partition_id}")
+        self.partition_id = partition_state.partition_id
+        self.bwrap_cmd_array = [
+            "bwrap",
+            "--unshare-pid",
+            "--unshare-mount",
+            "--unshare-ipc",
+        ]
 
     def inject_secrets(self, secrets: dict[str, str]) -> None:
         logger.info(f"Injecting {len(secrets)} secrets into RISC-V ZKVM tmpfs")
+        self.bwrap_cmd_array.extend(["--tmpfs", "/run/secrets"])
 
     def execute(self, bytecode: bytes) -> Any:
         logger.info(f"Executing RISC-V bytecode ({len(bytecode)} bytes) via riscv64-unknown-elf-run")
+        full_command = [
+            "systemd-run",
+            "--user",
+            "--scope",
+            "-p",
+            "MemoryMax=512M",
+            "-p",
+            "CPUQuota=50%",
+            *self.bwrap_cmd_array,
+            "riscv64-unknown-elf-run",
+        ]
+
         try:
-            result = subprocess.run(
-                ["riscv64-unknown-elf-run"],  # noqa: S607
+            result = subprocess.run(  # noqa: S603
+                full_command,
                 input=bytecode,
                 capture_output=True,
                 check=True,
@@ -155,6 +215,17 @@ class RiscvZkvmSandboxProvider:
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down RISC-V ZKVM sandbox (force={force})")
+        if self.partition_id:
+            subprocess.run(  # noqa: S603
+                ["systemctl", "--user", "stop", f"{self.partition_id}.scope"],  # noqa: S607
+                capture_output=True,
+                check=False,
+            )
+        subprocess.run(
+            ["umount", "/run/secrets"],  # noqa: S607
+            capture_output=True,
+            check=False,
+        )
 
     def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
         logger.info(f"Applying network egress rules for RISC-V ZKVM sandbox. Allowed domains: {allowed_domains}")
@@ -166,17 +237,45 @@ class RiscvZkvmSandboxProvider:
 class BpfSandboxProvider:
     """BPF execution provider for kernel-level execution."""
 
+    def __init__(self) -> None:
+        self.partition_id: str | None = None
+        self.bwrap_cmd_array: list[str] = []
+
     def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
         logger.info(f"Provisioning BPF sandbox: {partition_state.partition_id}")
+        self.partition_id = partition_state.partition_id
+        self.bwrap_cmd_array = [
+            "bwrap",
+            "--unshare-pid",
+            "--unshare-mount",
+            "--unshare-ipc",
+        ]
 
     def inject_secrets(self, secrets: dict[str, str]) -> None:
         logger.info(f"Injecting {len(secrets)} secrets into BPF tmpfs")
+        self.bwrap_cmd_array.extend(["--tmpfs", "/run/secrets"])
 
     def execute(self, bytecode: bytes) -> Any:
         logger.info(f"Executing BPF bytecode ({len(bytecode)} bytes) via bpftool")
+        full_command = [
+            "systemd-run",
+            "--user",
+            "--scope",
+            "-p",
+            "MemoryMax=512M",
+            "-p",
+            "CPUQuota=50%",
+            *self.bwrap_cmd_array,
+            "bpftool",
+            "prog",
+            "load",
+            "-",
+            "/sys/fs/bpf/prog",
+        ]
+
         try:
-            result = subprocess.run(
-                ["bpftool", "prog", "load", "-", "/sys/fs/bpf/prog"],  # noqa: S607
+            result = subprocess.run(  # noqa: S603
+                full_command,
                 input=bytecode,
                 capture_output=True,
                 check=True,
@@ -189,6 +288,17 @@ class BpfSandboxProvider:
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down BPF sandbox (force={force})")
+        if self.partition_id:
+            subprocess.run(  # noqa: S603
+                ["systemctl", "--user", "stop", f"{self.partition_id}.scope"],  # noqa: S607
+                capture_output=True,
+                check=False,
+            )
+        subprocess.run(
+            ["umount", "/run/secrets"],  # noqa: S607
+            capture_output=True,
+            check=False,
+        )
 
     def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
         logger.info(f"Applying network egress rules for BPF sandbox. Allowed domains: {allowed_domains}")
