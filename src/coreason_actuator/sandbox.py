@@ -10,7 +10,10 @@
 
 import collections
 import hashlib
+import json
 import subprocess
+import urllib.error
+import urllib.request
 from typing import Any, Protocol
 
 from coreason_manifest.spec.ontology import (
@@ -40,12 +43,28 @@ class HashiCorpVault:
     def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
         """
         Dynamically parses auth_requirements and retrieves secrets.
-        For this implementation, simulates fetching secrets via requests.
         """
         logger.info(f"Unsealing secrets via HashiCorp Vault at {self.vault_addr} for {auth_requirements}")
-        # In a real implementation, this would make HTTP requests to self.vault_addr
-        # using self.vault_token.
-        return {"simulated_secret_key": "simulated_secret_value"}
+
+        aggregated_secrets: dict[str, str] = {}
+        for req in auth_requirements:
+            url = f"{self.vault_addr.rstrip('/')}/{req}"
+            request = urllib.request.Request(url)  # noqa: S310
+            request.add_header("X-Vault-Token", self.vault_token)
+
+            try:
+                with urllib.request.urlopen(request) as response:  # noqa: S310
+                    data = json.loads(response.read().decode("utf-8"))
+                    # We assume the secret data is either in the root or in a 'data' envelope
+                    if isinstance(data, dict):
+                        secret_data = data.get("data", data)
+                        if isinstance(secret_data, dict):
+                            aggregated_secrets.update({k: v for k, v in secret_data.items() if isinstance(v, str)})
+            except (urllib.error.URLError, json.JSONDecodeError) as e:
+                logger.error(f"Failed to fetch secrets for {req}: {e}")
+                raise RuntimeError(f"Vault communication failed: {e}") from e
+
+        return aggregated_secrets
 
 
 class SandboxProviderProtocol(Protocol):
@@ -97,8 +116,8 @@ class WasmSandboxProvider:
             )
             return result.stdout.decode("utf-8")
         except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logger.warning(f"WASM execution failed or simulated: {e}")
-            return "WASM execution simulated"
+            logger.error(f"WASM execution failed: {e}")
+            raise RuntimeError(f"WASM execution failed: {e}") from e
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down WASM sandbox (force={force})")
@@ -131,8 +150,8 @@ class RiscvZkvmSandboxProvider:
             )
             return result.stdout.decode("utf-8")
         except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logger.warning(f"RISC-V execution failed or simulated: {e}")
-            return "RISC-V execution simulated"
+            logger.error(f"RISC-V execution failed: {e}")
+            raise RuntimeError(f"RISC-V execution failed: {e}") from e
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down RISC-V ZKVM sandbox (force={force})")
@@ -165,8 +184,8 @@ class BpfSandboxProvider:
             )
             return result.stdout.decode("utf-8")
         except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logger.warning(f"BPF execution failed or simulated: {e}")
-            return "BPF execution simulated"
+            logger.error(f"BPF execution failed: {e}")
+            raise RuntimeError(f"BPF execution failed: {e}") from e
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down BPF sandbox (force={force})")

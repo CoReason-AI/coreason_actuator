@@ -35,8 +35,8 @@ from hypothesis import strategies as st
 from coreason_actuator.strategies import (
     KinematicExecutionStrategy,
     MCPClientStrategy,
-    MemoryDistributedLock,
     NativeExecutionStrategy,
+    PostgresDistributedLock,
 )
 
 
@@ -126,38 +126,80 @@ def create_mock_manifest(mutates_state: bool = False, is_idempotent: bool = Fals
     )
 
 
+class MockAsyncpgConnection:
+    def __init__(self) -> None:
+        self.executed_queries: list[tuple[str, tuple[Any, ...]]] = []
+
+    async def execute(self, query: str, *args: Any) -> None:
+        self.executed_queries.append((query, args))
+
+
+class MockAsyncpgPool:
+    def __init__(self, conn: Any = None) -> None:
+        self.conn = conn or MockAsyncpgConnection()
+
+    @asynccontextmanager
+    async def acquire(self) -> AsyncIterator[Any]:
+        yield self.conn
+
+
 @pytest.mark.asyncio
-async def test_memory_distributed_lock_acquire() -> None:
-    lock = MemoryDistributedLock()
+async def test_postgres_distributed_lock_acquire() -> None:
+    pool = MockAsyncpgPool()
+    lock = PostgresDistributedLock(pool)
+
     async with lock.acquire("test_key", ttl=1000):
-        assert "test_key" in lock._locks
-        assert lock._locks["test_key"].locked()
-    assert not lock._locks["test_key"].locked()
+        assert len(pool.conn.executed_queries) == 2
+        assert pool.conn.executed_queries[0][0] == "SET LOCAL lock_timeout = '1000ms'"
+        assert pool.conn.executed_queries[1][0] == "SELECT pg_advisory_lock($1)"
+
+    assert len(pool.conn.executed_queries) == 3
+    assert pool.conn.executed_queries[2][0] == "SELECT pg_advisory_unlock($1)"
 
 
 @pytest.mark.asyncio
-async def test_memory_distributed_lock_acquire_timeout() -> None:
-    lock = MemoryDistributedLock()
+async def test_postgres_distributed_lock_acquire_timeout() -> None:
+    class FailingConnection(MockAsyncpgConnection):
+        async def execute(self, query: str, *args: Any) -> None:
+            if "pg_advisory_lock" in query:
+                raise Exception("lock_not_available for some reason")
+            await super().execute(query, *args)
 
-    async def worker1() -> None:
-        async with lock.acquire("test_key", ttl=1000):
-            await asyncio.sleep(0.1)
+    pool = MockAsyncpgPool(FailingConnection())
+    lock = PostgresDistributedLock(pool)
 
-    async def worker2() -> None:
-        with pytest.raises(TimeoutError, match="Failed to acquire lock for test_key within TTL"):
-            async with lock.acquire("test_key", ttl=10):
-                pass
-
-    await asyncio.gather(worker1(), worker2())
+    with pytest.raises(TimeoutError, match="Failed to acquire lock for test_key within TTL 10ms"):
+        async with lock.acquire("test_key", ttl=10):
+            pass
 
 
 @pytest.mark.asyncio
-async def test_memory_distributed_lock_acquire_no_ttl() -> None:
-    lock = MemoryDistributedLock()
+async def test_postgres_distributed_lock_acquire_other_error() -> None:
+    class FailingConnection(MockAsyncpgConnection):
+        async def execute(self, query: str, *args: Any) -> None:
+            if "pg_advisory_lock" in query:
+                raise ValueError("some other error")
+            await super().execute(query, *args)
+
+    pool = MockAsyncpgPool(FailingConnection())
+    lock = PostgresDistributedLock(pool)
+
+    with pytest.raises(ValueError, match="some other error"):
+        async with lock.acquire("test_key", ttl=10):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_postgres_distributed_lock_acquire_no_ttl() -> None:
+    pool = MockAsyncpgPool()
+    lock = PostgresDistributedLock(pool)
+
     async with lock.acquire("test_key_no_ttl"):
-        assert "test_key_no_ttl" in lock._locks
-        assert lock._locks["test_key_no_ttl"].locked()
-    assert not lock._locks["test_key_no_ttl"].locked()
+        assert len(pool.conn.executed_queries) == 1
+        assert pool.conn.executed_queries[0][0] == "SELECT pg_advisory_lock($1)"
+
+    assert len(pool.conn.executed_queries) == 2
+    assert pool.conn.executed_queries[1][0] == "SELECT pg_advisory_unlock($1)"
 
 
 @pytest.mark.asyncio
@@ -864,8 +906,6 @@ async def test_background_polling_sync_no_sla() -> None:
 
 class MockExecutionStrategySlow:
     async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
-        import asyncio
-
         _ = (intent, manifest, sandbox_pid)
         await asyncio.sleep(0.01)
         return "async_result"
@@ -873,8 +913,6 @@ class MockExecutionStrategySlow:
 
 class MockExecutionStrategyCrash:
     async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
-        import asyncio
-
         _ = (intent, manifest, sandbox_pid)
         await asyncio.sleep(0.01)
         raise RuntimeError("Something went wrong!")
@@ -882,8 +920,6 @@ class MockExecutionStrategyCrash:
 
 @pytest.mark.asyncio
 async def test_background_polling_async() -> None:
-    import asyncio
-
     from coreason_manifest.spec.ontology import ExecutionSLA
 
     from coreason_actuator.strategies import BackgroundPollingStrategy
@@ -927,8 +963,6 @@ async def test_background_polling_async() -> None:
 
 @pytest.mark.asyncio
 async def test_background_polling_async_crash() -> None:
-    import asyncio
-
     from coreason_manifest.spec.ontology import ExecutionSLA
 
     from coreason_actuator.strategies import BackgroundPollingStrategy
