@@ -15,6 +15,7 @@ import pytest
 from coreason_manifest.spec.ontology import BackpressurePolicy, ToolInvocationEvent, ToolManifest
 
 from coreason_actuator.daemon import ActuatorDaemon
+from coreason_actuator.sandbox import SandboxProviderProtocol, StatefulSandboxCache
 from coreason_actuator.security import MaskingFunctor
 from coreason_actuator.semantic_extractor import SemanticExtractor
 
@@ -121,8 +122,22 @@ class MockValidator:
             }
         )
 
-        # FRD implies session_state is available on state_hydration
+        from coreason_manifest.spec.ontology import EphemeralNamespacePartitionState
+
+        partition_state = EphemeralNamespacePartitionState.model_validate(
+            {
+                "partition_id": "part_123",
+                "execution_runtime": "wasm32-wasi",
+                "allow_network_egress": True,
+                "authorized_bytecode_hashes": ["a" * 64],
+                "max_ttl_seconds": 300,
+                "max_vram_mb": 1024,
+            }
+        )
+
+        # FRD implies session_state and partition_state are available on state_hydration
         object.__setattr__(state_hydration, "session_state", session_state)
+        object.__setattr__(state_hydration, "partition_state", partition_state)
 
         object.__setattr__(intent, "state_hydration", state_hydration)
         return intent
@@ -569,18 +584,37 @@ async def test_daemon_vault_unsealing_and_injection() -> None:
     registry = MockRegistry({"test_tool": create_mock_manifest()})
     vault = MockVault({"oauth2:github": "secret_token"})
 
-    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry, vault)  # type: ignore
-
     class MockSandbox:
         def __init__(self) -> None:
             self.injected_secrets: dict[str, str] = {}
+            self.network_rules: list[str] | None = None
+            self.immutability_exemptions: list[str] | None = None
 
         def inject_secrets(self, secrets: dict[str, str]) -> None:
             self.injected_secrets = secrets
 
-    mock_sandbox = MockSandbox()
-    daemon.active_sandboxes["test_event_123"] = mock_sandbox  # type: ignore
+        def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
+            self.network_rules = allowed_domains
 
+        def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
+            self.immutability_exemptions = tmpfs_exemptions
+
+    mock_sandbox = MockSandbox()
+
+    class MockCache(StatefulSandboxCache):
+        def __init__(self) -> None:
+            pass
+
+        def get_or_create(self, session_state: Any, partition_state: Any) -> SandboxProviderProtocol:
+            _ = session_state
+            _ = partition_state
+            return mock_sandbox  # type: ignore
+
+    mock_cache = MockCache()
+
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry, vault, sandbox_cache=mock_cache)  # type: ignore
+
+    # Do not set active_sandboxes manually; let the daemon cache do it
     await daemon.run_once()
 
     for _ in range(20):
