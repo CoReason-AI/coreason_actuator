@@ -266,11 +266,12 @@ async def test_native_execution_strategy_ast_safety_failure() -> None:
     )
     manifest = create_mock_manifest()
 
-    with pytest.raises(
-        ValueError,
-        match=r"Kinetic execution bleed detected|Payload is not valid syntax|AST safety verification failed",
-    ):
-        await strategy.execute(intent, manifest, sandbox_pid=None)
+    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+    assert result.payload["execution_status"] == "fatal_crash"
+    assert (
+        "Kinetic execution bleed detected" in result.payload["traceback"]
+        or "AST safety verification failed" in result.payload["traceback"]
+    )
 
 
 @pytest.mark.asyncio
@@ -292,8 +293,33 @@ async def test_native_execution_strategy_ast_safety_explicit_false() -> None:
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr("coreason_actuator.strategies.verify_ast_safety", MagicMock(return_value=False))
-        with pytest.raises(ValueError, match="AST safety verification failed for parameter 'code'"):
-            await strategy.execute(intent, manifest, sandbox_pid=None)
+        result = await strategy.execute(intent, manifest, sandbox_pid=None)
+        assert result.payload["execution_status"] == "fatal_crash"
+        assert "AST safety verification failed for parameter 'code'" in result.payload["traceback"]
+
+
+@pytest.mark.asyncio
+async def test_native_execution_strategy_ast_safety_unknown_error() -> None:
+    mock_callable = AsyncMock()
+    registry = MockRegistry({"test_tool": mock_callable})
+    lock_manager = MockLockManager()
+    strategy = NativeExecutionStrategy(registry, lock_manager)
+
+    intent = ToolInvocationEvent(
+        event_id="test_event",
+        timestamp=1704067200.0,
+        tool_name="test_tool",
+        parameters={"code": "dummy"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr("coreason_actuator.strategies.verify_ast_safety", MagicMock(side_effect=Exception("Unknown Error")))
+        result = await strategy.execute(intent, manifest, sandbox_pid=None)
+        assert result.payload["execution_status"] == "fatal_crash"
+        assert "Unknown Error" in result.payload["traceback"]
 
 
 @pytest.mark.asyncio
