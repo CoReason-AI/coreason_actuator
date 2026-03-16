@@ -118,7 +118,7 @@ class ActuatorDaemon:
                 jsonrpc="2.0",
                 id=raw_payload.get("id", None),
                 error=JSONRPCErrorState(
-                    code=-32000,
+                    code=429,
                     message="Too Many Requests: Daemon execution pool is saturated.",
                     data={"active_tasks": self.active_tasks_count},
                 ),
