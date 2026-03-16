@@ -127,12 +127,33 @@ async def test_wasm_provider_methods(mock_run: MagicMock) -> None:
     provider = WasmSandboxProvider()
     state = create_partition_state("wasm32-wasi")
     provider.provision(state)
+    assert provider.partition_id == "test_part"
+    assert provider.bwrap_cmd_array == ["bwrap", "--unshare-pid", "--unshare-mount", "--unshare-ipc"]
+
     provider.apply_network_egress_rules(["coreason.ai"])
     provider.enforce_filesystem_immutability(["/dev/shm"])  # noqa: S108
+
     provider.inject_secrets({"secret": "value"})
+    assert "--tmpfs" in provider.bwrap_cmd_array
+    assert "/run/secrets" in provider.bwrap_cmd_array
+
     res = provider.execute(b"test")
     assert res == "WASM execution mock success"
+
+    # Verify execute called with systemd-run
+    execute_call = mock_run.call_args_list[0]
+    called_cmd = execute_call[0][0]
+    assert called_cmd[0] == "systemd-run"
+    assert "wasmtime" in called_cmd
+
+    # Reset mock for teardown
+    mock_run.reset_mock()
     await provider.teardown()
+
+    # Teardown should have 2 calls: systemctl stop, and umount
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0][0][0] == ["systemctl", "--user", "stop", "test_part.scope"]
+    assert mock_run.call_args_list[1][0][0] == ["umount", "/run/secrets"]
 
     # Test subprocess failure fallback
     mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
@@ -147,12 +168,31 @@ async def test_riscv_provider_methods(mock_run: MagicMock) -> None:
     provider = RiscvZkvmSandboxProvider()
     state = create_partition_state("riscv32-zkvm")
     provider.provision(state)
+    assert provider.partition_id == "test_part"
+
     provider.apply_network_egress_rules(["coreason.ai"])
     provider.enforce_filesystem_immutability(["/dev/shm"])  # noqa: S108
+
     provider.inject_secrets({"secret": "value"})
+    assert "--tmpfs" in provider.bwrap_cmd_array
+
     res = provider.execute(b"test")
     assert res == "RISC-V execution mock success"
+
+    # Verify execute called with systemd-run
+    execute_call = mock_run.call_args_list[0]
+    called_cmd = execute_call[0][0]
+    assert called_cmd[0] == "systemd-run"
+    assert "riscv64-unknown-elf-run" in called_cmd
+
+    # Reset mock for teardown
+    mock_run.reset_mock()
     await provider.teardown()
+
+    # Teardown calls
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0][0][0] == ["systemctl", "--user", "stop", "test_part.scope"]
+    assert mock_run.call_args_list[1][0][0] == ["umount", "/run/secrets"]
 
     # Test subprocess failure fallback
     mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
@@ -167,12 +207,31 @@ async def test_bpf_provider_methods(mock_run: MagicMock) -> None:
     provider = BpfSandboxProvider()
     state = create_partition_state("bpf")
     provider.provision(state)
+    assert provider.partition_id == "test_part"
+
     provider.apply_network_egress_rules(["coreason.ai"])
     provider.enforce_filesystem_immutability(["/dev/shm"])  # noqa: S108
+
     provider.inject_secrets({"secret": "value"})
+    assert "--tmpfs" in provider.bwrap_cmd_array
+
     res = provider.execute(b"test")
     assert res == "BPF execution mock success"
+
+    # Verify execute called with systemd-run
+    execute_call = mock_run.call_args_list[0]
+    called_cmd = execute_call[0][0]
+    assert called_cmd[0] == "systemd-run"
+    assert "bpftool" in called_cmd
+
+    # Reset mock for teardown
+    mock_run.reset_mock()
     await provider.teardown()
+
+    # Teardown calls
+    assert mock_run.call_count == 2
+    assert mock_run.call_args_list[0][0][0] == ["systemctl", "--user", "stop", "test_part.scope"]
+    assert mock_run.call_args_list[1][0][0] == ["umount", "/run/secrets"]
 
     # Test subprocess failure fallback
     mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
