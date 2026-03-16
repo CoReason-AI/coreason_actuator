@@ -9,7 +9,9 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import hashlib
+import subprocess
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 from coreason_manifest.spec.ontology import (
@@ -23,6 +25,7 @@ from coreason_manifest.spec.ontology import (
 from coreason_actuator.sandbox import (
     BpfSandboxProvider,
     EnterpriseVaultProtocol,
+    HashiCorpVault,
     RiscvZkvmSandboxProvider,
     SandboxProviderFactory,
     StatefulSandboxCache,
@@ -40,6 +43,12 @@ class MockVault:
     def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
         _ = auth_requirements
         return self.secrets
+
+
+def test_hashicorp_vault() -> None:
+    vault = HashiCorpVault(vault_addr="http://localhost:8200", vault_token="test-token")  # noqa: S106
+    secrets = vault.unseal(["oauth2:github"])
+    assert secrets == {"simulated_secret_key": "simulated_secret_value"}
 
 
 def test_vault_protocol_mock() -> None:
@@ -88,7 +97,9 @@ def test_sandbox_factory_invalid() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wasm_provider_methods() -> None:
+@patch("subprocess.run")
+async def test_wasm_provider_methods(mock_run: MagicMock) -> None:
+    mock_run.return_value = MagicMock(stdout=b"WASM execution mock success")
     provider = WasmSandboxProvider()
     state = create_partition_state("wasm32-wasi")
     provider.provision(state)
@@ -96,12 +107,19 @@ async def test_wasm_provider_methods() -> None:
     provider.enforce_filesystem_immutability(["/dev/shm"])  # noqa: S108
     provider.inject_secrets({"secret": "value"})
     res = provider.execute(b"test")
-    assert res == "WASM execution simulated"
+    assert res == "WASM execution mock success"
     await provider.teardown()
+
+    # Test subprocess failure fallback
+    mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
+    res_fallback = provider.execute(b"test")
+    assert res_fallback == "WASM execution simulated"
 
 
 @pytest.mark.asyncio
-async def test_riscv_provider_methods() -> None:
+@patch("subprocess.run")
+async def test_riscv_provider_methods(mock_run: MagicMock) -> None:
+    mock_run.return_value = MagicMock(stdout=b"RISC-V execution mock success")
     provider = RiscvZkvmSandboxProvider()
     state = create_partition_state("riscv32-zkvm")
     provider.provision(state)
@@ -109,12 +127,19 @@ async def test_riscv_provider_methods() -> None:
     provider.enforce_filesystem_immutability(["/dev/shm"])  # noqa: S108
     provider.inject_secrets({"secret": "value"})
     res = provider.execute(b"test")
-    assert res == "RISC-V execution simulated"
+    assert res == "RISC-V execution mock success"
     await provider.teardown()
+
+    # Test subprocess failure fallback
+    mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
+    res_fallback = provider.execute(b"test")
+    assert res_fallback == "RISC-V execution simulated"
 
 
 @pytest.mark.asyncio
-async def test_bpf_provider_methods() -> None:
+@patch("subprocess.run")
+async def test_bpf_provider_methods(mock_run: MagicMock) -> None:
+    mock_run.return_value = MagicMock(stdout=b"BPF execution mock success")
     provider = BpfSandboxProvider()
     state = create_partition_state("bpf")
     provider.provision(state)
@@ -122,8 +147,13 @@ async def test_bpf_provider_methods() -> None:
     provider.enforce_filesystem_immutability(["/dev/shm"])  # noqa: S108
     provider.inject_secrets({"secret": "value"})
     res = provider.execute(b"test")
-    assert res == "BPF execution simulated"
+    assert res == "BPF execution mock success"
     await provider.teardown()
+
+    # Test subprocess failure fallback
+    mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
+    res_fallback = provider.execute(b"test")
+    assert res_fallback == "BPF execution simulated"
 
 
 def test_stateful_sandbox_cache_warm_start() -> None:

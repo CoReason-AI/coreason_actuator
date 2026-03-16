@@ -8,6 +8,7 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
+import math
 from typing import Literal, Protocol
 
 from coreason_manifest.spec.ontology import EmbodiedSensoryVectorProfile
@@ -40,21 +41,20 @@ class MultimodalSensoryTracker:
     the defined anomaly threshold.
     """
 
-    def __init__(self, anomaly_threshold: float) -> None:
+    def __init__(self, anomaly_threshold: float, history_size: int = 10) -> None:
         """
         Initializes the sensory tracker.
 
         Args:
             anomaly_threshold: The threshold above which a bayesian_surprise_score
                 triggers an event.
+            history_size: Maximum size of the historical buffer per modality.
         """
         if anomaly_threshold < 0.0:
             raise ValueError("Anomaly threshold must be non-negative.")
         self.anomaly_threshold = anomaly_threshold
-        # In a real implementation, this might maintain a running average
-        # or historical buffer to compute true KL divergence.
-        # For this requirement, we treat the ingested delta_score directly
-        # as or mapped to the bayesian_surprise_score.
+        self.history_size = history_size
+        self._history: dict[str, list[float]] = {}
 
     def ingest_delta(
         self,
@@ -74,9 +74,26 @@ class MultimodalSensoryTracker:
         if delta_score < 0.0:
             raise ValueError("Delta score must be non-negative.")
 
-        # For this implementation, the incoming delta score directly maps
-        # to the Bayesian surprise score representing KL divergence.
-        bayesian_surprise_score = delta_score
+        if modality not in self._history:
+            self._history[modality] = []
+
+        history = self._history[modality]
+
+        # Compute simple KL divergence proxy: incoming score vs running average
+        if not history:
+            bayesian_surprise_score = delta_score
+        else:
+            average_score = sum(history) / len(history)
+            # Mathematical approximation of KL divergence (P || Q) for scalars:
+            # P * log(P / Q) - P + Q
+            p = delta_score + 1e-6  # Add epsilon to prevent log(0) or division by 0
+            q = average_score + 1e-6
+            bayesian_surprise_score = p * math.log(p / q) - p + q
+
+        # Update historical buffer
+        history.append(delta_score)
+        if len(history) > self.history_size:
+            history.pop(0)
 
         if bayesian_surprise_score > self.anomaly_threshold:
             logger.info(

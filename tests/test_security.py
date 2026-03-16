@@ -27,6 +27,45 @@ def test_masking_functor_basic() -> None:
     assert redacted == f"Hello {MaskingFunctor.REDACTION_STRING} world!"
 
 
+def test_masking_functor_recursive_dict() -> None:
+    """Test recursive redaction on dictionaries."""
+    secrets = ["secret_key", "secret_value"]
+    functor = MaskingFunctor(secrets)
+
+    original = {
+        "normal_key": "normal_value",
+        "secret_key": "normal_value",
+        "nested": {"another_key": "secret_value", "list_key": ["safe", "secret_key_in_list"]},
+    }
+
+    redacted = functor.redact(original)
+
+    assert redacted["normal_key"] == "normal_value"
+    assert redacted[MaskingFunctor.REDACTION_STRING] == "normal_value"
+    assert redacted["nested"]["another_key"] == MaskingFunctor.REDACTION_STRING
+    assert redacted["nested"]["list_key"] == ["safe", f"{MaskingFunctor.REDACTION_STRING}_in_list"]
+
+
+def test_masking_functor_recursive_list() -> None:
+    """Test recursive redaction on lists."""
+    secrets = ["hidden"]
+    functor = MaskingFunctor(secrets)
+
+    original = ["visible", "hidden", {"key": "hidden_value"}]
+    redacted = functor.redact(original)
+
+    assert redacted[0] == "visible"
+    assert redacted[1] == MaskingFunctor.REDACTION_STRING
+    assert redacted[2]["key"] == f"{MaskingFunctor.REDACTION_STRING}_value"
+
+
+def test_masking_functor_other_types() -> None:
+    """Test with types that are neither str, dict, nor list."""
+    functor = MaskingFunctor(["secret"])
+    assert functor.redact(123) == 123
+    assert functor.redact(None) is None
+
+
 def test_masking_functor_multiple_secrets() -> None:
     """Test replacing multiple secrets in the same text."""
     secrets = ["secretA", "secretB"]
@@ -60,7 +99,7 @@ def test_masking_functor_no_secrets() -> None:
 def test_masking_functor_none_text() -> None:
     """Test with None text."""
     functor = MaskingFunctor(["secret"])
-    assert functor.redact(None) is None  # type: ignore[arg-type]
+    assert functor.redact(None) is None
     assert functor.redact("") == ""
 
 
