@@ -9,7 +9,9 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import hashlib
+import json
 import subprocess
+import urllib.error
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -45,10 +47,32 @@ class MockVault:
         return self.secrets
 
 
-def test_hashicorp_vault() -> None:
+@patch("urllib.request.urlopen")
+def test_hashicorp_vault(mock_urlopen: MagicMock) -> None:
+    # Setup mock response
+    mock_response = MagicMock()
+    mock_response.read.return_value = json.dumps({"data": {"real_secret_key": "real_secret_value"}}).encode("utf-8")
+    mock_response.__enter__.return_value = mock_response
+    mock_urlopen.return_value = mock_response
+
     vault = HashiCorpVault(vault_addr="http://localhost:8200", vault_token="test-token")  # noqa: S106
     secrets = vault.unseal(["oauth2:github"])
-    assert secrets == {"simulated_secret_key": "simulated_secret_value"}
+    assert secrets == {"real_secret_key": "real_secret_value"}
+
+    # Verify the request was made correctly
+    mock_urlopen.assert_called_once()
+    request = mock_urlopen.call_args[0][0]
+    assert request.full_url == "http://localhost:8200/oauth2:github"
+    assert request.get_header("X-vault-token") == "test-token"
+
+
+@patch("urllib.request.urlopen")
+def test_hashicorp_vault_error(mock_urlopen: MagicMock) -> None:
+    mock_urlopen.side_effect = urllib.error.URLError("Network error")
+
+    vault = HashiCorpVault(vault_addr="http://localhost:8200", vault_token="test-token")  # noqa: S106
+    with pytest.raises(RuntimeError, match="Vault communication failed: <urlopen error Network error>"):
+        vault.unseal(["oauth2:github"])
 
 
 def test_vault_protocol_mock() -> None:
@@ -112,8 +136,8 @@ async def test_wasm_provider_methods(mock_run: MagicMock) -> None:
 
     # Test subprocess failure fallback
     mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
-    res_fallback = provider.execute(b"test")
-    assert res_fallback == "WASM execution simulated"
+    with pytest.raises(RuntimeError, match="WASM execution failed"):
+        provider.execute(b"test")
 
 
 @pytest.mark.asyncio
@@ -132,8 +156,8 @@ async def test_riscv_provider_methods(mock_run: MagicMock) -> None:
 
     # Test subprocess failure fallback
     mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
-    res_fallback = provider.execute(b"test")
-    assert res_fallback == "RISC-V execution simulated"
+    with pytest.raises(RuntimeError, match="RISC-V execution failed"):
+        provider.execute(b"test")
 
 
 @pytest.mark.asyncio
@@ -152,8 +176,8 @@ async def test_bpf_provider_methods(mock_run: MagicMock) -> None:
 
     # Test subprocess failure fallback
     mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
-    res_fallback = provider.execute(b"test")
-    assert res_fallback == "BPF execution simulated"
+    with pytest.raises(RuntimeError, match="BPF execution failed"):
+        provider.execute(b"test")
 
 
 def test_stateful_sandbox_cache_warm_start() -> None:
