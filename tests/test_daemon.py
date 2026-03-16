@@ -202,7 +202,7 @@ async def test_daemon_backpressure_shedding() -> None:
     await daemon.run_once()
 
     assert len(broker.pushed) == 1
-    assert broker.pushed[0]["error"]["code"] == -32000
+    assert broker.pushed[0]["error"]["code"] == 429
     assert "Too Many Requests" in broker.pushed[0]["error"]["message"]
 
 
