@@ -145,15 +145,45 @@ class NativeExecutionStrategy:
         params = intent.parameters or {}
         for key, value in params.items():
             # We attempt to parse and verify it as an AST
-            # If verify_ast_safety returns False, we raise an exception
             if isinstance(value, str):
                 try:
                     if not verify_ast_safety(value):
-                        raise ValueError(f"AST safety verification failed for parameter '{key}'.")
+                        import traceback
+
+                        return ObservationEvent(
+                            event_id=f"obs-{intent.event_id}",
+                            timestamp=1704067200.0,
+                            payload={
+                                "execution_status": "fatal_crash",
+                                "traceback": f"AST safety verification failed for parameter '{key}'.",
+                            },
+                        )
                 except ValueError as e:
                     if str(e) == "Payload is not valid syntax.":
                         continue
-                    raise e
+                    # Any other parsing or value errors from verify_ast_safety should also be trapped
+                    import traceback
+
+                    return ObservationEvent(
+                        event_id=f"obs-{intent.event_id}",
+                        timestamp=1704067200.0,
+                        payload={
+                            "execution_status": "fatal_crash",
+                            "traceback": traceback.format_exc(),
+                        },
+                    )
+                except Exception:
+                    # Broad catch-all for AST parsing failures to prevent bubbling unhandled exceptions
+                    import traceback
+
+                    return ObservationEvent(
+                        event_id=f"obs-{intent.event_id}",
+                        timestamp=1704067200.0,
+                        payload={
+                            "execution_status": "fatal_crash",
+                            "traceback": traceback.format_exc(),
+                        },
+                    )
 
         # Idempotency Rules
         side_effects = manifest.side_effects
