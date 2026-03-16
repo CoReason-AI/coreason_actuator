@@ -26,6 +26,7 @@ from coreason_actuator.ingress import IPCValidator
 from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, IPCBrokerProtocol
 from coreason_actuator.sandbox import EnterpriseVaultProtocol, SandboxProviderProtocol
 from coreason_actuator.security import MaskingFunctor
+from coreason_actuator.semantic_extractor import SemanticExtractor
 from coreason_actuator.strategies import ExecutionStrategyProtocol
 from coreason_actuator.utils.logger import logger
 
@@ -55,6 +56,7 @@ class ActuatorDaemon:
         execution_strategy: ExecutionStrategyProtocol,
         registry: ActionSpaceRegistryProtocol,
         vault: EnterpriseVaultProtocol | None = None,
+        semantic_extractor: SemanticExtractor | None = None,
     ) -> None:
         self.broker = broker
         self.validator = validator
@@ -62,6 +64,7 @@ class ActuatorDaemon:
         self.execution_strategy = execution_strategy
         self.registry = registry
         self.vault = vault
+        self.semantic_extractor = semantic_extractor
         self.active_tasks_count = 0
         self._is_running = False
         self.active_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -211,15 +214,18 @@ class ActuatorDaemon:
             if self.masking_functor:
                 payload = scrub_payload(payload, self.masking_functor)
 
-            # Extract truncation metadata if present to avoid polluting the payload
-            # and to satisfy structural truncation requirements.
             truncation_metadata = None
             if isinstance(result, dict) and "truncation_metadata" in result:
-                # If the result itself contains truncation_metadata (e.g. from SemanticExtractor)
+                # If the result itself contains truncation_metadata natively
                 truncation_metadata = result.pop("truncation_metadata")
-            elif isinstance(payload, dict) and "truncation_metadata" in payload:
-                # If it's already at the root of the payload dict
-                truncation_metadata = payload.pop("truncation_metadata")
+
+            if self.semantic_extractor:
+                payload, ext_metadata = self.semantic_extractor.truncate_payload(payload)
+                if ext_metadata:
+                    if truncation_metadata:
+                        truncation_metadata["items_omitted"] += ext_metadata.get("items_omitted", 0)
+                    else:
+                        truncation_metadata = ext_metadata
 
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),

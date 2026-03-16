@@ -23,32 +23,44 @@ class SemanticExtractor:
     def __init__(self, max_array_length: int = 50) -> None:
         self.max_array_length = max_array_length
 
-    def truncate_payload(self, raw_payload: dict[str, Any]) -> dict[str, Any]:
+    def truncate_payload(self, raw_payload: Any) -> tuple[Any, dict[str, Any] | None]:
         """
         Applies Structural Semantic Truncation to large arrays within the payload.
         To prevent JSON-bomb memory exhaustion without violating strict Pydantic schema bounds,
-        it slices the raw array and appends a strictly typed metadata dictionary as an out-of-band
-        sibling key to the root ObservationEvent schema.
+        it slices the raw array and returns a strictly typed metadata dictionary to be appended
+        as an out-of-band sibling key to the root ObservationEvent schema.
         """
-        truncated_payload = raw_payload.copy()
         items_omitted = 0
 
         # We need to find arrays that exceed the limit.
-        # Assuming the payload is a flat dictionary or we only truncate top-level arrays for now.
-        for key, value in truncated_payload.items():
-            if isinstance(value, list) and len(value) > self.max_array_length:
-                omitted = len(value) - self.max_array_length
-                items_omitted += omitted
-                truncated_payload[key] = value[: self.max_array_length]
+        # Recursively search for large arrays within the payload to truncate them.
+        def _truncate(node: Any) -> Any:
+            nonlocal items_omitted
+            if isinstance(node, dict):
+                return {k: _truncate(v) for k, v in node.items()}
+            if isinstance(node, list):
+                if len(node) > self.max_array_length:
+                    omitted = len(node) - self.max_array_length
+                    items_omitted += omitted
+                    truncated_list = node[: self.max_array_length]
+                    return [_truncate(item) for item in truncated_list]
+                return [_truncate(item) for item in node]
+            return node
 
+        # Handle deep copy automatically through recursive creation or explicitly if needed
+        # Since _truncate creates new dicts and lists, it essentially acts as a deep copy
+        # for mutatable structures.
+        truncated_payload = _truncate(raw_payload)
+
+        truncation_metadata = None
         if items_omitted > 0:
-            truncated_payload["truncation_metadata"] = {
+            truncation_metadata = {
                 "semantic_truncation_applied": True,
                 "items_omitted": items_omitted,
             }
             logger.info(f"Applied semantic truncation, omitted {items_omitted} items.")
 
-        return truncated_payload
+        return truncated_payload, truncation_metadata
 
 
 class TensorStorageProtocol(Protocol):

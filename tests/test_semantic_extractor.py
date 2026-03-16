@@ -21,9 +21,9 @@ def test_semantic_extractor_no_truncation() -> None:
     extractor = SemanticExtractor(max_array_length=50)
     raw_payload = {"status": "success", "data": [1, 2, 3, 4, 5], "metadata": {"key": "value"}}
 
-    truncated = extractor.truncate_payload(raw_payload)
+    truncated, metadata = extractor.truncate_payload(raw_payload)
 
-    assert "truncation_metadata" not in truncated
+    assert metadata is None
     assert len(truncated["data"]) == 5
     assert truncated["status"] == "success"
 
@@ -32,11 +32,11 @@ def test_semantic_extractor_with_truncation() -> None:
     extractor = SemanticExtractor(max_array_length=5)
     raw_payload = {"status": "success", "data": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], "other_data": ["a", "b", "c"]}
 
-    truncated = extractor.truncate_payload(raw_payload)
+    truncated, metadata = extractor.truncate_payload(raw_payload)
 
-    assert "truncation_metadata" in truncated
-    assert truncated["truncation_metadata"]["semantic_truncation_applied"] is True
-    assert truncated["truncation_metadata"]["items_omitted"] == 5
+    assert metadata is not None
+    assert metadata["semantic_truncation_applied"] is True
+    assert metadata["items_omitted"] == 5
     assert len(truncated["data"]) == 5
     assert truncated["data"] == [1, 2, 3, 4, 5]
     assert len(truncated["other_data"]) == 3
@@ -47,12 +47,24 @@ def test_semantic_extractor_multiple_arrays() -> None:
     extractor = SemanticExtractor(max_array_length=2)
     raw_payload = {"data1": [1, 2, 3, 4], "data2": ["a", "b", "c"]}
 
-    truncated = extractor.truncate_payload(raw_payload)
+    truncated, metadata = extractor.truncate_payload(raw_payload)
 
-    assert "truncation_metadata" in truncated
-    assert truncated["truncation_metadata"]["items_omitted"] == 3  # (4-2) + (3-2)
+    assert metadata is not None
+    assert metadata["items_omitted"] == 3  # (4-2) + (3-2)
     assert len(truncated["data1"]) == 2
     assert len(truncated["data2"]) == 2
+
+
+def test_semantic_extractor_root_array_truncation() -> None:
+    extractor = SemanticExtractor(max_array_length=3)
+    raw_payload = [1, 2, 3, 4, 5, 6]
+
+    truncated, metadata = extractor.truncate_payload(raw_payload)
+
+    assert metadata is not None
+    assert metadata["items_omitted"] == 3
+    assert len(truncated) == 3
+    assert truncated == [1, 2, 3]
 
 
 class MockTensorStorage(TensorStorageProtocol):
