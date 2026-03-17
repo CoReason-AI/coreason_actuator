@@ -9,7 +9,6 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import asyncio
-import concurrent.futures
 import hashlib
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -884,9 +883,7 @@ async def test_background_polling_sync() -> None:
 
     mock_strategy = MockExecutionStrategy()
     mock_broker = MockIPCBroker()
-    polling_strategy = BackgroundPollingStrategy(
-        mock_strategy, mock_broker, executor=concurrent.futures.ThreadPoolExecutor()
-    )
+    polling_strategy = BackgroundPollingStrategy(mock_strategy, mock_broker)
 
     # recreate manifest because it's frozen
     manifest_data = create_mock_manifest().model_dump()
@@ -913,9 +910,7 @@ async def test_background_polling_sync_no_sla() -> None:
 
     mock_strategy = MockExecutionStrategy()
     mock_broker = MockIPCBroker()
-    polling_strategy = BackgroundPollingStrategy(
-        mock_strategy, mock_broker, executor=concurrent.futures.ThreadPoolExecutor()
-    )
+    polling_strategy = BackgroundPollingStrategy(mock_strategy, mock_broker)
 
     manifest_data = create_mock_manifest().model_dump()
     manifest_data["sla"] = None
@@ -957,9 +952,7 @@ async def test_background_polling_async() -> None:
 
     mock_strategy = MockExecutionStrategySlow()
     mock_broker = MockIPCBroker()
-    polling_strategy = BackgroundPollingStrategy(
-        mock_strategy, mock_broker, executor=concurrent.futures.ThreadPoolExecutor()
-    )
+    polling_strategy = BackgroundPollingStrategy(mock_strategy, mock_broker)
 
     manifest_data = create_mock_manifest().model_dump()
     manifest_data["sla"] = ExecutionSLA(max_execution_time_ms=30000, max_compute_footprint_mb=100)
@@ -983,10 +976,7 @@ async def test_background_polling_async() -> None:
     assert result.triggering_invocation_id == "test_event_id_async"
 
     # Wait for the background task to complete
-    for _ in range(50):
-        if len(mock_broker.pushed_messages) > 0:
-            break
-        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
 
     assert len(mock_broker.pushed_messages) == 1
     pushed_msg = mock_broker.pushed_messages[0]
@@ -1005,9 +995,7 @@ async def test_background_polling_async_crash() -> None:
 
     mock_strategy = MockExecutionStrategyCrash()
     mock_broker = MockIPCBroker()
-    polling_strategy = BackgroundPollingStrategy(
-        mock_strategy, mock_broker, executor=concurrent.futures.ThreadPoolExecutor()
-    )
+    polling_strategy = BackgroundPollingStrategy(mock_strategy, mock_broker)
 
     manifest_data = create_mock_manifest().model_dump()
     manifest_data["sla"] = ExecutionSLA(max_execution_time_ms=30000, max_compute_footprint_mb=100)
@@ -1028,10 +1016,7 @@ async def test_background_polling_async_crash() -> None:
     assert result.payload["status"] == "pending_async_execution"
 
     # Wait for the background task to crash and push the error
-    for _ in range(50):
-        if len(mock_broker.pushed_messages) > 0:
-            break
-        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.05)
 
     assert len(mock_broker.pushed_messages) == 1
     pushed_msg = mock_broker.pushed_messages[0]

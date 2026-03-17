@@ -9,7 +9,6 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import asyncio
-import concurrent.futures
 import hashlib
 import json
 import time
@@ -358,15 +357,9 @@ class BackgroundPollingStrategy:
     Otherwise, it executes as a background task, immediately yielding a pending ObservationEvent.
     """
 
-    def __init__(
-        self,
-        execution_strategy: ExecutionStrategyProtocol,
-        broker: IPCBrokerProtocol,
-        executor: concurrent.futures.Executor | None = None,
-    ):
+    def __init__(self, execution_strategy: ExecutionStrategyProtocol, broker: IPCBrokerProtocol):
         self.execution_strategy = execution_strategy
         self.broker = broker
-        self.executor = executor or concurrent.futures.ProcessPoolExecutor()
 
     async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
         sla = manifest.sla
@@ -399,25 +392,12 @@ class BackgroundPollingStrategy:
             triggering_invocation_id=intent.event_id,
         )
 
-    @staticmethod
-    def _run_sync_in_executor(
-        execution_strategy: ExecutionStrategyProtocol,
-        intent: ToolInvocationEvent,
-        manifest: ToolManifest,
-        sandbox_pid: Any,
-    ) -> Any:
-        """Synchronously runs the async execution strategy. Designed to be run in an executor."""
-        return asyncio.run(execution_strategy.execute(intent, manifest, sandbox_pid))
-
     async def _background_execute(
         self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any, job_id: str
     ) -> None:
         """Executes the task in the background and pushes the final observation to the broker."""
         try:
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                self.executor, self._run_sync_in_executor, self.execution_strategy, intent, manifest, sandbox_pid
-            )
+            result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)
             # Wrap the successful result in an ObservationEvent
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),

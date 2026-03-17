@@ -65,6 +65,19 @@ class ActuatorDaemon:
         semantic_extractor: SemanticExtractor | None = None,
         sandbox_cache: StatefulSandboxCache | None = None,
     ) -> None:
+        """
+        Initializes the ActuatorDaemon.
+
+        Args:
+            broker (IPCBrokerProtocol): The IPC message broker queue for ingress/egress.
+            validator (IPCValidator): Cryptographic intent verification and pre-flight validation logic.
+            backpressure_policy (BackpressurePolicy): Concurrency limits and load shedding configurations.
+            execution_strategy (ExecutionStrategyProtocol): Routing strategy for execution (e.g. Native, MCP).
+            registry (ActionSpaceRegistryProtocol): Mounted registry for verifying ToolManifest definitions.
+            vault (EnterpriseVaultProtocol | None, optional): Provider for unsealing dynamic enterprise secrets.
+            semantic_extractor (SemanticExtractor | None, optional): Truncation mapping engine. Defaults to None.
+            sandbox_cache (StatefulSandboxCache | None, optional): Ephemeral execution state caching. Defaults to None.
+        """
         self.broker = broker
         self.validator = validator
         self.backpressure_policy = backpressure_policy
@@ -85,12 +98,16 @@ class ActuatorDaemon:
         self.masking_functor = masking_functor
 
     async def start(self) -> None:
-        """Starts the main polling loop of the IPC Daemon."""
+        """
+        Starts the main polling loop of the IPC Daemon.
+
+        Continuously polls the broker for workloads. Includes a 1ms explicit await yield
+        to mathematically prevent `asyncio` event loop starvation.
+        """
         self._is_running = True
         logger.info("Actuator daemon started. Polling for intents...")
         while self._is_running:
             await self.run_once()
-            # Small yield to prevent event loop starvation if the broker is extremely fast.
             await asyncio.sleep(0.001)
 
     def stop(self) -> None:
@@ -99,21 +116,26 @@ class ActuatorDaemon:
         logger.info("Actuator daemon stopped.")
 
     async def run_once(self) -> None:
-        """Pulls a single payload from the IPC broker and validates it."""
+        """
+        Pulls a single payload from the IPC broker and validates it.
+
+        Evaluates immediate BargeInInterruptEvent cancellation signals.
+        Evaluates backpressure policies. If limits are reached, yields an error response to the queue.
+        Evaluates cryptographic intent and pre-flight manifest constraints.
+        If successful, executes the intent concurrently.
+        """
         try:
             raw_payload = await self.broker.pull()
         except Exception as e:
             logger.error(f"Error pulling from broker: {e}")
             return
 
-        # Preemption check (BargeInInterruptEvent can come as raw JSON)
         if isinstance(raw_payload, dict) and raw_payload.get("type") == "barge_in":
             target_event_id = raw_payload.get("target_event_id")
             if target_event_id:
                 await self._handle_preemption(str(target_event_id))
             return
 
-        # Check backpressure limits
         max_concurrent = self.backpressure_policy.max_concurrent_tool_invocations
         if max_concurrent is not None and self.active_tasks_count >= max_concurrent:
             logger.warning(
@@ -121,7 +143,6 @@ class ActuatorDaemon:
                 active=self.active_tasks_count,
                 max=max_concurrent,
             )
-            # Yield error response immediately to the broker ingress queue (or response queue)
             error_response = JSONRPCErrorResponseState(
                 jsonrpc="2.0",
                 id=raw_payload.get("id", None),
@@ -134,7 +155,6 @@ class ActuatorDaemon:
             await self.broker.push(error_response.model_dump())
             return
 
-        # Pre-Flight Validation
         result = self.validator.validate_intent(raw_payload)
 
         if isinstance(result, JSONRPCErrorResponseState):
@@ -142,7 +162,6 @@ class ActuatorDaemon:
             await self.broker.push(result.model_dump())
             return
 
-        # Execute the intent concurrently
         task = asyncio.create_task(self._dispatch_intent(result, raw_payload.get("id")))
         self.active_tasks[result.event_id] = task
 
@@ -161,12 +180,20 @@ class ActuatorDaemon:
     async def _dispatch_intent(self, intent: ToolInvocationEvent, request_id: Any) -> None:
         """
         Executes the tool intent via the Do-Operator and returns an ObservationEvent.
+
+        Pipeline stages:
+        1. Retrieves the specific ToolManifest from the action space registry.
+        2. Retrieves or provisions sandbox states if dynamically requested via state_hydration.
+        3. Enforces dual-evaluation boundaries on networking and file system.
+        4. Injects dynamically retrieved Enterprise Vault keys if required.
+        5. Executes the intent strategy.
+        6. Intercepts cancellations based on manifest.is_preemptible. If False, shields execution.
+        7. Pushes the structured ObservationEvent back to the orchestrator.
         """
         self.active_tasks_count += 1
         logger.info(f"Dispatched tool invocation: {intent.tool_name}", request_id=request_id)
 
         try:
-            # Get manifest from registry to pass to execution strategy
             manifest = self.registry.get_tool(intent.tool_name)
             if not manifest:
                 logger.error(f"ToolManifest not found for tool: {intent.tool_name}")
@@ -181,25 +208,19 @@ class ActuatorDaemon:
                 await self.broker.push(error_response.model_dump())
                 return
 
-            # Execute Do-Operator
-            # Retrieve sandbox if assigned (e.g., dynamically by earlier orchestration/provisioning).
             sandbox = self.active_sandboxes.get(intent.event_id)
 
-            # Extract session state from the state_hydration natively bound to intent
             if hasattr(intent, "state_hydration") and intent.state_hydration is not None:
                 session_state = getattr(intent.state_hydration, "session_state", None)
                 partition_state = getattr(intent.state_hydration, "partition_state", None)
 
-                # Provision or get sandbox via StatefulSandboxCache if available
                 if self.sandbox_cache and session_state and partition_state:
                     sandbox = self.sandbox_cache.get_or_create(session_state, partition_state)
                     self.active_sandboxes[intent.event_id] = sandbox
 
-                    # Apply Dual-Evaluation Permission Boundary and immutability checks
                     verify_network_access(manifest, partition_state, sandbox)
                     enforce_sandbox_immutability(manifest, sandbox)
 
-                # Based on FR-2.3, if allowed_vault_keys is present, unseal secrets and inject into sandbox
                 if session_state and getattr(session_state, "allowed_vault_keys", None) and self.vault:
                     logger.info(f"Unsealing secrets for keys: {session_state.allowed_vault_keys}")
                     secrets = await self.vault.unseal(session_state.allowed_vault_keys)
@@ -213,19 +234,14 @@ class ActuatorDaemon:
                 try:
                     result = await asyncio.shield(inner_task)
                 except asyncio.CancelledError:
-                    # Outer task was cancelled (barge-in received).
-                    # But since it's not preemptible, we must wait for it to finish!
                     logger.info(
                         f"Task for {intent.event_id} was preempted, but is not preemptible. Waiting for completion."
                     )
                     result = await inner_task
-                    # We must emit completed_under_preemption
                     self.preempted_events.add(intent.event_id)
             else:
-                # Preemptible
                 result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)
 
-            # Successful Execution
             payload = {"execution_status": "completed", "result": result}
 
             if intent.event_id in self.preempted_events:
@@ -266,7 +282,6 @@ class ActuatorDaemon:
             await self.broker.push(obs_dict)
 
         except asyncio.CancelledError:
-            # Task was cancelled and is preemptible
             logger.info(f"Execution for {intent.event_id} was safely eradicated via preemption.")
 
             sandbox = self.active_sandboxes.get(intent.event_id)
@@ -280,17 +295,13 @@ class ActuatorDaemon:
                 event_id=str(uuid.uuid4()),
                 timestamp=time.time(),
                 type="observation",
-                # The FRD: If True, eradicate safely. It doesn't explicitly specify the
-                # Observation payload for eradication, but following conventions,
-                # we return a fatal_crash or preempted status.
                 payload={"execution_status": "preempted", "eradicated": True},
                 triggering_invocation_id=intent.event_id,
             )
             await self.broker.push(observation.model_dump())
-            raise  # Re-raise CancelledError to properly terminate the task
+            raise
 
         except Exception:
-            # Fatal Crash
             tb = traceback.format_exc()
             if self.masking_functor:
                 tb = self.masking_functor.redact(tb)
