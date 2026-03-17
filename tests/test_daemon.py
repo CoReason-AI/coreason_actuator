@@ -25,7 +25,7 @@ class MockVault:
         self.secrets = secrets
         self.unsealed_keys: list[str] = []
 
-    def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
+    async def unseal(self, auth_requirements: list[str]) -> dict[str, str]:
         self.unsealed_keys.extend(auth_requirements)
         return self.secrets
 
