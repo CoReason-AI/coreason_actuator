@@ -10,7 +10,17 @@
 
 from typing import Any, Protocol
 
-from coreason_manifest.spec.ontology import ToolInvocationEvent, ToolManifest
+from coreason_manifest.spec.ontology import EvictionPolicy, ToolInvocationEvent, ToolManifest
+
+
+class ActuatorEngineProtocol(Protocol):
+    """Protocol defining the interface for the primary execution engine class."""
+
+    async def execute(
+        self, intent: ToolInvocationEvent, manifest: ToolManifest, eviction_policy: EvictionPolicy | None = None
+    ) -> dict[str, Any]:
+        """Awaits an authorized tool execution and returns a raw, verifiable JSON result."""
+        ...
 
 
 class IPCBrokerProtocol(Protocol):
