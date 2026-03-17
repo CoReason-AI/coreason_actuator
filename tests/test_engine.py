@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 from coreason_manifest.spec.ontology import (
     AgentAttestationReceipt,
+    EvictionPolicy,
     ExecutionSLA,
     PermissionBoundaryPolicy,
     SideEffectProfile,
@@ -12,7 +13,6 @@ from coreason_manifest.spec.ontology import (
     ToolInvocationEvent,
     ToolManifest,
     ZeroKnowledgeReceipt,
-    EvictionPolicy,
 )
 
 from coreason_actuator.engine import ActuatorEngine
