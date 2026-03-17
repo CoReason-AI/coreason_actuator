@@ -983,7 +983,10 @@ async def test_background_polling_async() -> None:
     assert result.triggering_invocation_id == "test_event_id_async"
 
     # Wait for the background task to complete
-    await asyncio.sleep(0.05)
+    for _ in range(50):
+        if len(mock_broker.pushed_messages) > 0:
+            break
+        await asyncio.sleep(0.01)
 
     assert len(mock_broker.pushed_messages) == 1
     pushed_msg = mock_broker.pushed_messages[0]
@@ -1025,7 +1028,10 @@ async def test_background_polling_async_crash() -> None:
     assert result.payload["status"] == "pending_async_execution"
 
     # Wait for the background task to crash and push the error
-    await asyncio.sleep(0.05)
+    for _ in range(50):
+        if len(mock_broker.pushed_messages) > 0:
+            break
+        await asyncio.sleep(0.01)
 
     assert len(mock_broker.pushed_messages) == 1
     pushed_msg = mock_broker.pushed_messages[0]
