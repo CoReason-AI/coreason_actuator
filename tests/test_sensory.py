@@ -55,7 +55,7 @@ def test_sensory_tracker_threshold_breached() -> None:
 
 
 def test_sensory_tracker_kl_divergence() -> None:
-    tracker = MultimodalSensoryTracker(anomaly_threshold=2.0, history_size=3)
+    tracker = MultimodalSensoryTracker(anomaly_threshold=0.2, history_size=3)
 
     # Ingest baseline
     tracker.ingest_delta(modality="video", temporal_duration_ms=100, delta_score=0.1)
@@ -64,7 +64,7 @@ def test_sensory_tracker_kl_divergence() -> None:
 
     # History is [0.1, 0.1, 0.1], average = 0.1
     # Now ingest a huge anomaly
-    delta_score = 5.0
+    delta_score = 0.5
 
     # Calculate expected
     p = delta_score + 1e-6
@@ -79,7 +79,7 @@ def test_sensory_tracker_kl_divergence() -> None:
         mock_logger.assert_called_once()
 
     # Check history eviction
-    assert tracker._history["video"] == [0.1, 0.1, 5.0]
+    assert tracker._history["video"] == [0.1, 0.1, 0.5]
 
 
 def test_sensory_tracker_different_modalities() -> None:
@@ -89,7 +89,7 @@ def test_sensory_tracker_different_modalities() -> None:
     assert result_audio is not None
     assert result_audio.sensory_modality == "audio"
 
-    result_spatial = tracker.ingest_delta(modality="spatial_telemetry", temporal_duration_ms=200, delta_score=1.5)
+    result_spatial = tracker.ingest_delta(modality="spatial_telemetry", temporal_duration_ms=200, delta_score=0.5)
     assert result_spatial is not None
     assert result_spatial.sensory_modality == "spatial_telemetry"
 
