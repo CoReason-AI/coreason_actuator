@@ -605,7 +605,7 @@ async def test_daemon_vault_unsealing_and_injection() -> None:
         def __init__(self) -> None:
             pass
 
-        def get_or_create(self, session_state: Any, partition_state: Any) -> SandboxProviderProtocol:
+        async def get_or_create(self, session_state: Any, partition_state: Any) -> SandboxProviderProtocol:
             _ = session_state
             _ = partition_state
             return mock_sandbox  # type: ignore

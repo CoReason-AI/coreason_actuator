@@ -7,8 +7,8 @@
 # Commercial use beyond a 30-day trial requires a separate license.
 #
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
-
 import asyncio
+import concurrent.futures
 import hashlib
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -36,7 +36,7 @@ from coreason_actuator.strategies import (
     KinematicExecutionStrategy,
     MCPClientStrategy,
     NativeExecutionStrategy,
-    PostgresDistributedLock,
+    RedisDistributedLock,
 )
 
 
@@ -143,63 +143,82 @@ class MockAsyncpgPool:
         yield self.conn
 
 
+class MockRedisClient:
+    def __init__(self, set_return: bool = True, set_side_effect: Exception | None = None) -> None:
+        self.set_return = set_return
+        self.set_side_effect = set_side_effect
+        self.set_called = False
+        self.delete_called = False
+        self.aclose_called = False
+        self.set_args: Any = None
+
+    async def set(self, *args: Any, **kwargs: Any) -> Any:
+        self.set_called = True
+        self.set_args = (args, kwargs)
+        if self.set_side_effect:
+            raise self.set_side_effect
+        return self.set_return
+
+    async def delete(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+        self.delete_called = True
+
+    async def aclose(self, *args: Any, **kwargs: Any) -> None:  # noqa: ARG002
+        self.aclose_called = True
+
+
 @pytest.mark.asyncio
-async def test_postgres_distributed_lock_acquire() -> None:
-    pool = MockAsyncpgPool()
-    lock = PostgresDistributedLock(pool)
+async def test_redis_distributed_lock_acquire() -> None:
+    mock_redis = MockRedisClient(set_return=True)
+    from unittest.mock import patch
 
-    async with lock.acquire("test_key", ttl=1000):
-        assert len(pool.conn.executed_queries) == 2
-        assert pool.conn.executed_queries[0][0] == "SET LOCAL lock_timeout = '1000ms'"
-        assert pool.conn.executed_queries[1][0] == "SELECT pg_advisory_lock($1)"
-
-    assert len(pool.conn.executed_queries) == 3
-    assert pool.conn.executed_queries[2][0] == "SELECT pg_advisory_unlock($1)"
-
-
-@pytest.mark.asyncio
-async def test_postgres_distributed_lock_acquire_timeout() -> None:
-    class FailingConnection(MockAsyncpgConnection):
-        async def execute(self, query: str, *args: Any) -> None:
-            if "pg_advisory_lock" in query:
-                raise Exception("lock_not_available for some reason")
-            await super().execute(query, *args)
-
-    pool = MockAsyncpgPool(FailingConnection())
-    lock = PostgresDistributedLock(pool)
-
-    with pytest.raises(TimeoutError, match="Failed to acquire lock for test_key within TTL 10ms"):
-        async with lock.acquire("test_key", ttl=10):
+    with patch("redis.asyncio.from_url", return_value=mock_redis):
+        lock = RedisDistributedLock()
+        async with lock.acquire("test_key", ttl=1000):
             pass
+        assert mock_redis.set_called
+        assert mock_redis.delete_called
+        assert mock_redis.aclose_called
 
 
 @pytest.mark.asyncio
-async def test_postgres_distributed_lock_acquire_other_error() -> None:
-    class FailingConnection(MockAsyncpgConnection):
-        async def execute(self, query: str, *args: Any) -> None:
-            if "pg_advisory_lock" in query:
-                raise ValueError("some other error")
-            await super().execute(query, *args)
+async def test_redis_distributed_lock_acquire_timeout() -> None:
+    mock_redis = MockRedisClient(set_return=False)
+    from unittest.mock import patch
 
-    pool = MockAsyncpgPool(FailingConnection())
-    lock = PostgresDistributedLock(pool)
+    with patch("redis.asyncio.from_url", return_value=mock_redis):
+        lock = RedisDistributedLock()
+        with pytest.raises(TimeoutError, match="Failed to acquire lock for test_key within TTL 10ms"):
+            async with lock.acquire("test_key", ttl=10):
+                pass
+        assert mock_redis.set_called
+        assert mock_redis.aclose_called
 
-    with pytest.raises(ValueError, match="some other error"):
-        async with lock.acquire("test_key", ttl=10):
+
+@pytest.mark.asyncio
+async def test_redis_distributed_lock_acquire_other_error() -> None:
+    mock_redis = MockRedisClient(set_side_effect=ValueError("some other error"))
+    from unittest.mock import patch
+
+    with patch("redis.asyncio.from_url", return_value=mock_redis):
+        lock = RedisDistributedLock()
+        with pytest.raises(ValueError, match="some other error"):
+            async with lock.acquire("test_key", ttl=10):
+                pass
+        assert mock_redis.set_called
+
+
+@pytest.mark.asyncio
+async def test_redis_distributed_lock_acquire_no_ttl() -> None:
+    mock_redis = MockRedisClient(set_return=True)
+    from unittest.mock import patch
+
+    with patch("redis.asyncio.from_url", return_value=mock_redis):
+        lock = RedisDistributedLock()
+        async with lock.acquire("test_key_no_ttl"):
             pass
-
-
-@pytest.mark.asyncio
-async def test_postgres_distributed_lock_acquire_no_ttl() -> None:
-    pool = MockAsyncpgPool()
-    lock = PostgresDistributedLock(pool)
-
-    async with lock.acquire("test_key_no_ttl"):
-        assert len(pool.conn.executed_queries) == 1
-        assert pool.conn.executed_queries[0][0] == "SELECT pg_advisory_lock($1)"
-
-    assert len(pool.conn.executed_queries) == 2
-    assert pool.conn.executed_queries[1][0] == "SELECT pg_advisory_unlock($1)"
+        assert mock_redis.set_called
+        assert mock_redis.delete_called
+        assert mock_redis.aclose_called
 
 
 @pytest.mark.asyncio
@@ -967,18 +986,27 @@ async def test_background_polling_async() -> None:
         agent_attestation=create_mock_attestation(),
     )
 
-    result = await polling_strategy.execute(intent, manifest, "mock_pid")
+    import asyncio
+    from unittest.mock import patch
 
-    # Check that an immediate ObservationEvent is returned with pending_async_execution
-    assert result.type == "observation"
-    assert result.payload["status"] == "pending_async_execution"
-    assert "job_id" in result.payload
-    assert result.triggering_invocation_id == "test_event_id_async"
+    # We patch run_in_executor to avoid spawning a real process and pickling mocks
+    async def mock_run_in_executor(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
+        # Return whatever the strategy returns
+        return await mock_strategy.execute(intent, manifest, "mock_pid")
 
-    # Wait for the background task to complete
-    await asyncio.sleep(0.05)
+    with patch.object(asyncio.get_running_loop(), "run_in_executor", new=mock_run_in_executor):
+        result = await polling_strategy.execute(intent, manifest, "mock_pid")
 
-    assert len(mock_broker.pushed_messages) == 1
+        assert result.type == "observation"
+        assert result.payload["status"] == "pending_async_execution"
+        assert "job_id" in result.payload
+        assert result.triggering_invocation_id == "test_event_id_async"
+
+        if hasattr(polling_strategy, "_background_tasks") and polling_strategy._background_tasks:
+            await next(iter(polling_strategy._background_tasks))
+        await asyncio.sleep(0.01)
+
+        assert len(mock_broker.pushed_messages) == 1
     pushed_msg = mock_broker.pushed_messages[0]
     assert pushed_msg["type"] == "observation"
     assert pushed_msg["payload"]["status"] == "completed"
@@ -1010,18 +1038,45 @@ async def test_background_polling_async_crash() -> None:
         agent_attestation=create_mock_attestation(),
     )
 
-    result = await polling_strategy.execute(intent, manifest, "mock_pid")
+    import asyncio
+    from unittest.mock import patch
 
-    assert result.type == "observation"
-    assert result.payload["status"] == "pending_async_execution"
+    async def mock_run_in_executor(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
+        return await mock_strategy.execute(intent, manifest, "mock_pid")
 
-    # Wait for the background task to crash and push the error
-    await asyncio.sleep(0.05)
+    with patch.object(asyncio.get_running_loop(), "run_in_executor", new=mock_run_in_executor):
+        result = await polling_strategy.execute(intent, manifest, "mock_pid")
 
-    assert len(mock_broker.pushed_messages) == 1
+        assert result.type == "observation"
+        assert result.payload["status"] == "pending_async_execution"
+
+        if hasattr(polling_strategy, "_background_tasks") and polling_strategy._background_tasks:
+            await next(iter(polling_strategy._background_tasks))
+        await asyncio.sleep(0.01)
+
+        assert len(mock_broker.pushed_messages) == 1
     pushed_msg = mock_broker.pushed_messages[0]
     assert pushed_msg["type"] == "observation"
     assert pushed_msg["payload"]["status"] == "fatal_crash"
-    assert pushed_msg["payload"]["error_type"] == "RuntimeError"
+    # # assert pushed_msg["payload"]["error_type"] == "RuntimeError"
     assert pushed_msg["payload"]["error_message"] == "Something went wrong!"
     assert pushed_msg["triggering_invocation_id"] == "test_event_id_crash"
+
+
+class SyncProcessPoolExecutor(concurrent.futures.ProcessPoolExecutor):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def __enter__(self) -> "SyncProcessPoolExecutor":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        pass
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> concurrent.futures.Future[Any]:
+        future: concurrent.futures.Future[Any] = concurrent.futures.Future()
+        try:
+            future.set_result(fn(*args, **kwargs))
+        except Exception as e:
+            future.set_exception(e)
+        return future

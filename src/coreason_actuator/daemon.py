@@ -192,7 +192,7 @@ class ActuatorDaemon:
 
                 # Provision or get sandbox via StatefulSandboxCache if available
                 if self.sandbox_cache and session_state and partition_state:
-                    sandbox = self.sandbox_cache.get_or_create(session_state, partition_state)
+                    sandbox = await self.sandbox_cache.get_or_create(session_state, partition_state)
                     self.active_sandboxes[intent.event_id] = sandbox
 
                     # Apply Dual-Evaluation Permission Boundary and immutability checks

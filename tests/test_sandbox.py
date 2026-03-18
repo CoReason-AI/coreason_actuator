@@ -245,7 +245,8 @@ async def test_bpf_provider_methods(mock_run: MagicMock) -> None:
         provider.execute(b"test")
 
 
-def test_stateful_sandbox_cache_warm_start() -> None:
+@pytest.mark.asyncio
+async def test_stateful_sandbox_cache_warm_start() -> None:
     cache = StatefulSandboxCache(max_size=2)
     session_state = SecureSubSessionState(
         session_id="session_1", allowed_vault_keys=[], max_ttl_seconds=300, description="Test"
@@ -253,10 +254,10 @@ def test_stateful_sandbox_cache_warm_start() -> None:
     partition_state = create_partition_state("wasm32-wasi")
 
     # Cold start
-    provider1 = cache.get_or_create(session_state, partition_state)
+    provider1 = await cache.get_or_create(session_state, partition_state)
 
     # Warm start
-    provider2 = cache.get_or_create(session_state, partition_state)
+    provider2 = await cache.get_or_create(session_state, partition_state)
 
     assert provider1 is provider2
     assert len(cache._cache) == 1
@@ -273,15 +274,15 @@ async def test_stateful_sandbox_cache_eviction() -> None:
 
     from unittest.mock import AsyncMock
 
-    p1 = cache.get_or_create(session1, partition_state)
+    p1 = await cache.get_or_create(session1, partition_state)
     p1.teardown = AsyncMock()  # type: ignore
 
-    _ = cache.get_or_create(session2, partition_state)
+    _ = await cache.get_or_create(session2, partition_state)
 
     assert len(cache._cache) == 2
 
     # Adding third should evict first (s1)
-    _ = cache.get_or_create(session3, partition_state)
+    _ = await cache.get_or_create(session3, partition_state)
 
     assert len(cache._cache) == 2
     assert "s1" not in cache._cache
@@ -304,45 +305,13 @@ async def test_stateful_sandbox_cache_teardown_all() -> None:
     session1 = SecureSubSessionState(session_id="s1", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
     from unittest.mock import AsyncMock
 
-    p1 = cache.get_or_create(session1, partition_state)
+    p1 = await cache.get_or_create(session1, partition_state)
     p1.teardown = AsyncMock()  # type: ignore
 
     await cache.teardown_all()
 
     assert len(cache._cache) == 0
     p1.teardown.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_stateful_sandbox_cache_eviction_no_loop() -> None:
-    # We simulate a runtime error when getting the event loop
-    cache = StatefulSandboxCache(max_size=2)
-    partition_state = create_partition_state("wasm32-wasi")
-
-    session1 = SecureSubSessionState(session_id="s1", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
-    session2 = SecureSubSessionState(session_id="s2", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
-    session3 = SecureSubSessionState(session_id="s3", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
-
-    from unittest.mock import AsyncMock, patch
-
-    p1 = cache.get_or_create(session1, partition_state)
-    p1.teardown = AsyncMock()  # type: ignore
-
-    _ = cache.get_or_create(session2, partition_state)
-
-    assert len(cache._cache) == 2
-
-    # Force RuntimeError from get_running_loop
-    with patch("asyncio.get_running_loop", side_effect=RuntimeError("no loop")):
-        _ = cache.get_or_create(session3, partition_state)
-
-    assert len(cache._cache) == 2
-    assert "s1" not in cache._cache
-    assert "s2" in cache._cache
-    assert "s3" in cache._cache
-
-    # Since there was no loop, teardown was never scheduled
-    p1.teardown.assert_not_called()
 
 
 def test_verify_bytecode_safety_success() -> None:
