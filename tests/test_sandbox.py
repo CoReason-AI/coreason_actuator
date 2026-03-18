@@ -9,7 +9,6 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import hashlib
-import subprocess
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -121,9 +120,7 @@ def test_sandbox_factory_invalid() -> None:
 
 
 @pytest.mark.asyncio
-@patch("subprocess.run")
-async def test_wasm_provider_methods(mock_run: MagicMock) -> None:
-    mock_run.return_value = MagicMock(stdout=b"WASM execution mock success")
+async def test_wasm_provider_methods() -> None:
     provider = WasmSandboxProvider()
     state = create_partition_state("wasm32-wasi")
     provider.provision(state)
@@ -137,36 +134,49 @@ async def test_wasm_provider_methods(mock_run: MagicMock) -> None:
     assert "--tmpfs" in provider.bwrap_cmd_array
     assert "/run/secrets" in provider.bwrap_cmd_array
 
-    # Reset mock since apply_network_egress_rules uses subprocess.run
-    mock_run.reset_mock()
-    res = provider.execute(b"test")
-    assert res == "WASM execution mock success"
+    from unittest.mock import AsyncMock, patch
 
-    # Verify execute called with systemd-run
-    execute_call = mock_run.call_args_list[0]
-    called_cmd = execute_call[0][0]
-    assert called_cmd[0] == "systemd-run"
-    assert "wasmtime" in called_cmd
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (b"WASM execution mock success", b"")
+        mock_process.returncode = 0
+        mock_exec.return_value = mock_process
 
-    # Reset mock for teardown
-    mock_run.reset_mock()
-    await provider.teardown()
+        res = await provider.execute(b"test")
+        assert res == "WASM execution mock success"
 
-    # Teardown should have 2 calls: systemctl stop, and umount
-    assert mock_run.call_count == 2
-    assert mock_run.call_args_list[0][0][0] == ["systemctl", "--user", "stop", "test_part.scope"]
-    assert mock_run.call_args_list[1][0][0] == ["umount", "/run/secrets"]
+        execute_call = mock_exec.call_args_list[0]
+        called_cmd = execute_call[0]
+        assert called_cmd[0] == "systemd-run"
+        assert "wasmtime" in called_cmd
 
-    # Test subprocess failure fallback
-    mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
-    with pytest.raises(RuntimeError, match="WASM execution failed"):
-        provider.execute(b"test")
+    # Test apply_network_egress_rules
+    with patch("subprocess.run") as mock_run:
+        provider.apply_network_egress_rules(["coreason.ai"])
+        assert mock_run.call_count > 0
+
+    with patch("subprocess.run") as mock_run:
+        await provider.teardown()
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0][0][0] == ["systemctl", "--user", "stop", "test_part.scope"]
+        assert mock_run.call_args_list[1][0][0] == ["umount", "/run/secrets"]
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec2:
+            mock_process2 = AsyncMock()
+            mock_process2.returncode = 1
+            mock_process2.communicate.return_value = (b"", b"WASM execution failed: some error")
+            mock_exec2.return_value = mock_process2
+            with pytest.raises(RuntimeError, match="WASM execution failed:"):
+                await provider.execute(b"test")
+
+            mock_process2.communicate.side_effect = TimeoutError()
+            mock_process2.kill = MagicMock()
+            with pytest.raises(RuntimeError, match="WASM execution failed: Timeout"):
+                await provider.execute(b"test")
 
 
 @pytest.mark.asyncio
-@patch("subprocess.run")
-async def test_riscv_provider_methods(mock_run: MagicMock) -> None:
-    mock_run.return_value = MagicMock(stdout=b"RISC-V execution mock success")
+async def test_riscv_provider_methods() -> None:
     provider = RiscvZkvmSandboxProvider()
     state = create_partition_state("riscv32-zkvm")
     provider.provision(state)
@@ -178,36 +188,49 @@ async def test_riscv_provider_methods(mock_run: MagicMock) -> None:
     provider.inject_secrets({"secret": "value"})
     assert "--tmpfs" in provider.bwrap_cmd_array
 
-    # Reset mock since apply_network_egress_rules uses subprocess.run
-    mock_run.reset_mock()
-    res = provider.execute(b"test")
-    assert res == "RISC-V execution mock success"
+    from unittest.mock import AsyncMock, patch
 
-    # Verify execute called with systemd-run
-    execute_call = mock_run.call_args_list[0]
-    called_cmd = execute_call[0][0]
-    assert called_cmd[0] == "systemd-run"
-    assert "riscv64-unknown-elf-run" in called_cmd
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (b"RISC-V execution mock success", b"")
+        mock_process.returncode = 0
+        mock_exec.return_value = mock_process
 
-    # Reset mock for teardown
-    mock_run.reset_mock()
-    await provider.teardown()
+        res = await provider.execute(b"test")
+        assert res == "RISC-V execution mock success"
 
-    # Teardown calls
-    assert mock_run.call_count == 2
-    assert mock_run.call_args_list[0][0][0] == ["systemctl", "--user", "stop", "test_part.scope"]
-    assert mock_run.call_args_list[1][0][0] == ["umount", "/run/secrets"]
+        execute_call = mock_exec.call_args_list[0]
+        called_cmd = execute_call[0]
+        assert called_cmd[0] == "systemd-run"
+        assert "riscv64-unknown-elf-run" in called_cmd
 
-    # Test subprocess failure fallback
-    mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
-    with pytest.raises(RuntimeError, match="RISC-V execution failed"):
-        provider.execute(b"test")
+    # Test apply_network_egress_rules
+    with patch("subprocess.run") as mock_run:
+        provider.apply_network_egress_rules(["coreason.ai"])
+        assert mock_run.call_count > 0
+
+    with patch("subprocess.run") as mock_run:
+        await provider.teardown()
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0][0][0] == ["systemctl", "--user", "stop", "test_part.scope"]
+        assert mock_run.call_args_list[1][0][0] == ["umount", "/run/secrets"]
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec2:
+            mock_process2 = AsyncMock()
+            mock_process2.returncode = 1
+            mock_process2.communicate.return_value = (b"", b"RISC-V execution failed: some error")
+            mock_exec2.return_value = mock_process2
+            with pytest.raises(RuntimeError, match="RISC-V execution failed:"):
+                await provider.execute(b"test")
+
+            mock_process2.communicate.side_effect = TimeoutError()
+            mock_process2.kill = MagicMock()
+            with pytest.raises(RuntimeError, match="RISC-V execution failed: Timeout"):
+                await provider.execute(b"test")
 
 
 @pytest.mark.asyncio
-@patch("subprocess.run")
-async def test_bpf_provider_methods(mock_run: MagicMock) -> None:
-    mock_run.return_value = MagicMock(stdout=b"BPF execution mock success")
+async def test_bpf_provider_methods() -> None:
     provider = BpfSandboxProvider()
     state = create_partition_state("bpf")
     provider.provision(state)
@@ -219,30 +242,45 @@ async def test_bpf_provider_methods(mock_run: MagicMock) -> None:
     provider.inject_secrets({"secret": "value"})
     assert "--tmpfs" in provider.bwrap_cmd_array
 
-    # Reset mock since apply_network_egress_rules uses subprocess.run
-    mock_run.reset_mock()
-    res = provider.execute(b"test")
-    assert res == "BPF execution mock success"
+    from unittest.mock import AsyncMock, patch
 
-    # Verify execute called with systemd-run
-    execute_call = mock_run.call_args_list[0]
-    called_cmd = execute_call[0][0]
-    assert called_cmd[0] == "systemd-run"
-    assert "bpftool" in called_cmd
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_process = AsyncMock()
+        mock_process.communicate.return_value = (b"BPF execution mock success", b"")
+        mock_process.returncode = 0
+        mock_exec.return_value = mock_process
 
-    # Reset mock for teardown
-    mock_run.reset_mock()
-    await provider.teardown()
+        res = await provider.execute(b"test")
+        assert res == "BPF execution mock success"
 
-    # Teardown calls
-    assert mock_run.call_count == 2
-    assert mock_run.call_args_list[0][0][0] == ["systemctl", "--user", "stop", "test_part.scope"]
-    assert mock_run.call_args_list[1][0][0] == ["umount", "/run/secrets"]
+        execute_call = mock_exec.call_args_list[0]
+        called_cmd = execute_call[0]
+        assert called_cmd[0] == "systemd-run"
+        assert "bpftool" in called_cmd
 
-    # Test subprocess failure fallback
-    mock_run.side_effect = subprocess.CalledProcessError(1, "cmd")
-    with pytest.raises(RuntimeError, match="BPF execution failed"):
-        provider.execute(b"test")
+    # Test apply_network_egress_rules
+    with patch("subprocess.run") as mock_run:
+        provider.apply_network_egress_rules(["coreason.ai"])
+        assert mock_run.call_count > 0
+
+    with patch("subprocess.run") as mock_run:
+        await provider.teardown()
+        assert mock_run.call_count == 2
+        assert mock_run.call_args_list[0][0][0] == ["systemctl", "--user", "stop", "test_part.scope"]
+        assert mock_run.call_args_list[1][0][0] == ["umount", "/run/secrets"]
+
+        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec2:
+            mock_process2 = AsyncMock()
+            mock_process2.returncode = 1
+            mock_process2.communicate.return_value = (b"", b"BPF execution failed: some error")
+            mock_exec2.return_value = mock_process2
+            with pytest.raises(RuntimeError, match="BPF execution failed:"):
+                await provider.execute(b"test")
+
+            mock_process2.communicate.side_effect = TimeoutError()
+            mock_process2.kill = MagicMock()
+            with pytest.raises(RuntimeError, match="BPF execution failed: Timeout"):
+                await provider.execute(b"test")
 
 
 @pytest.mark.asyncio
