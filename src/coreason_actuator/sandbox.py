@@ -369,7 +369,7 @@ class StatefulSandboxCache:
         self.max_size = max_size
         self._cache: collections.OrderedDict[str, SandboxProviderProtocol] = collections.OrderedDict()
 
-    def get_or_create(
+    async def get_or_create(
         self,
         session_state: SecureSubSessionState,
         partition_state: EphemeralNamespacePartitionState,
@@ -390,21 +390,8 @@ class StatefulSandboxCache:
             # Evict least recently used
             evicted_id, evicted_provider = self._cache.popitem(last=False)
             logger.info(f"Cache full: Evicting sandbox for session {evicted_id}")
-            # Note: Cache eviction is synchronous here, but teardown is async.
-            # In a real environment, this might need an async task or an async cache.
-            # For the interface change, we'll log a warning or handle it properly later.
-            import asyncio
-
-            try:
-                loop = asyncio.get_running_loop()
-                task = loop.create_task(evicted_provider.teardown(force=True))
-                # Store the task to avoid RUF006 and prevent GC of the task
-                if not hasattr(self, "_bg_tasks"):
-                    self._bg_tasks = set()
-                self._bg_tasks.add(task)
-                task.add_done_callback(self._bg_tasks.discard)
-            except RuntimeError:
-                pass  # no running loop
+            # FIX: Explicitly await the teardown to guarantee physical VRAM is freed
+            await evicted_provider.teardown(force=True)
 
         self._cache[session_id] = provider
         return provider
