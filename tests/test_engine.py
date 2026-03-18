@@ -46,12 +46,11 @@ class MockActuatorDaemon:
 
 
 def create_mock_zk_proof() -> ZeroKnowledgeReceipt:
-    return ZeroKnowledgeReceipt(
+    return ZeroKnowledgeReceipt.model_construct(
         proof_protocol="zk-SNARK",
         public_inputs_hash="mock",
         verifier_key_id="mock",
         cryptographic_blob="mock",
-        latent_state_commitments={},
     )
 
 

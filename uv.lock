@@ -137,14 +137,14 @@ dev = [
 
 [[package]]
 name = "coreason-manifest"
-version = "0.26.1"
+version = "0.29.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d2/89/6632f8ae5e13fb59049bf5851a8b5357145b07d0651610e7c5a3d250ec1f/coreason_manifest-0.26.1.tar.gz", hash = "sha256:15cce72598fb2b259c2ea1afe23c78b53244151421e243fe34e2a57296eee054", size = 223425, upload-time = "2026-03-14T10:02:50.194Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/05/4a/aed5e4bd49aea9ebc981161002ab3ba4e8c5d998579a0f6cc7333f29993f/coreason_manifest-0.29.0.tar.gz", hash = "sha256:440f1a2c5b2d0cae2c983b291cf6291d3192b7b908ddb1ef675c5dbd7a780260", size = 377673, upload-time = "2026-03-18T02:28:25.345Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/17/72/23edf0ae5617a5ea21676bbcc1af86db4759c168ebf9bd4ff00606c5912c/coreason_manifest-0.26.1-py3-none-any.whl", hash = "sha256:4ebd7666221aca25c76ae03ea1fd67224e6e39c149ef84712f5056b4ad0b6dc2", size = 76470, upload-time = "2026-03-14T10:02:48.79Z" },
+    { url = "https://files.pythonhosted.org/packages/95/f7/d2cc9739eb7f2e55caacdc7b2768e67f0e2cb68dc1c6376a194b2f00e087/coreason_manifest-0.29.0-py3-none-any.whl", hash = "sha256:6660811ca982d6fc821f10d1d43f8aa42d2e486099bf6ccc635c525cbe3b6b7a", size = 149789, upload-time = "2026-03-18T02:28:23.689Z" },
 ]
 
 [[package]]
