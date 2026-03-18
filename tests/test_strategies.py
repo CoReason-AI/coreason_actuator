@@ -24,6 +24,7 @@ from coreason_manifest.spec.ontology import (
     MCPServerManifest,
     PermissionBoundaryPolicy,
     SideEffectProfile,
+    StdioTransportProfile,
     ToolInvocationEvent,
     ToolManifest,
     VerifiableCredentialPresentationReceipt,
@@ -100,12 +101,11 @@ def create_mock_attestation() -> AgentAttestationReceipt:
 
 
 def create_mock_zk_proof() -> ZeroKnowledgeReceipt:
-    return ZeroKnowledgeReceipt(
+    return ZeroKnowledgeReceipt.model_construct(
         proof_protocol="zk-SNARK",
         public_inputs_hash="mock",
         verifier_key_id="mock",
         cryptographic_blob="mock",
-        latent_state_commitments={},
     )
 
 
@@ -542,9 +542,9 @@ async def test_native_execution_strategy_ast_safety_allows_plain_strings() -> No
 @pytest.mark.asyncio
 async def test_mcp_client_strategy_success() -> None:
     server_manifest = MCPServerManifest(
-        server_uri="http://localhost:8000",
-        transport_type="http",
-        binary_hash="mock",
+        server_id="mock_id",
+        transport=StdioTransportProfile(command="mock"),
+        binary_hash="a" * 64,
         capability_whitelist=MCPCapabilityWhitelistPolicy(
             allowed_tools=["test_tool"], allowed_prompts=[], allowed_resources=[]
         ),
@@ -604,9 +604,9 @@ async def test_mcp_client_strategy_missing_tool() -> None:
 @pytest.mark.asyncio
 async def test_mcp_client_strategy_none_parameters() -> None:
     server_manifest = MCPServerManifest(
-        server_uri="stdio://mock",
-        transport_type="stdio",
-        binary_hash="mock",
+        server_id="mock_id",
+        transport=StdioTransportProfile(command="mock"),
+        binary_hash="a" * 64,
         capability_whitelist=MCPCapabilityWhitelistPolicy(
             allowed_tools=["test_tool_no_params"], allowed_prompts=[], allowed_resources=[]
         ),
@@ -677,7 +677,7 @@ class MockKinematicBrowser:
         return (1920, 1080)
 
     async def get_dom_hash(self) -> str:
-        return "mock_dom_hash_456"
+        return "a" * 64
 
     async def capture_viewport_screenshot(self) -> bytes:
         return b"mock_image_bytes"
@@ -710,8 +710,8 @@ async def test_kinematic_strategy_click_success() -> None:
     assert result.type == "browser"
     assert result.current_url == "https://example.com/test"
     assert result.viewport_size == (1920, 1080)
-    assert result.dom_hash == "mock_dom_hash_456"
-    assert result.accessibility_tree_hash == "[DEPRECATED_BY_ATOMIC_LOCATORS]"
+    assert result.dom_hash == "a" * 64
+    assert result.accessibility_tree_hash == "a" * 64
     assert result.screenshot_cid == "ipfs://mock_screenshot_cid_123"
 
     assert len(browser.clicked_coords) == 1
@@ -747,8 +747,8 @@ async def test_kinematic_strategy_type_text_success() -> None:
     assert result.type == "browser"
     assert result.current_url == "https://example.com/test"
     assert result.viewport_size == (1920, 1080)
-    assert result.dom_hash == "mock_dom_hash_456"
-    assert result.accessibility_tree_hash == "[DEPRECATED_BY_ATOMIC_LOCATORS]"
+    assert result.dom_hash == "a" * 64
+    assert result.accessibility_tree_hash == "a" * 64
     assert result.screenshot_cid == "ipfs://mock_screenshot_cid_123"
 
     assert len(browser.typed_texts) == 1

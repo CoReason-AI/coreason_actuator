@@ -52,7 +52,7 @@ class MockValidator:
 
         self.error_response = JSONRPCErrorResponseState(
             jsonrpc="2.0",
-            id="123",
+            id=123,
             error=JSONRPCErrorState(code=400, message="Mock validation failure"),
         )
 
@@ -75,13 +75,12 @@ class MockValidator:
             timestamp=12345.6,
             tool_name="test_tool",
             parameters={},
-            zk_proof=ZeroKnowledgeReceipt.model_validate(
+            zk_proof=ZeroKnowledgeReceipt.model_construct(
                 {
                     "proof_protocol": "zk-SNARK",
                     "public_inputs_hash": "a" * 64,
                     "verifier_key_id": "b",
                     "cryptographic_blob": "c",
-                    "latent_state_commitments": {},
                 }
             ),
             agent_attestation=AgentAttestationReceipt.model_validate(
@@ -180,7 +179,7 @@ def create_mock_manifest(tool_name: str = "test_tool", is_preemptible: bool = Fa
 
 @pytest.mark.asyncio
 async def test_daemon_successful_dispatch() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
     strategy = MockExecutionStrategy()
@@ -204,7 +203,7 @@ async def test_daemon_successful_dispatch() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_backpressure_shedding() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     # Set max concurrent to 1, but seed active tasks to 1 to force shedding
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=1)
@@ -223,7 +222,7 @@ async def test_daemon_backpressure_shedding() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_validation_failure() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=True)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
     strategy = MockExecutionStrategy()
@@ -265,7 +264,7 @@ async def test_daemon_start_stop() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_execution_success() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
     strategy = MockExecutionStrategy(result={"some": "data"})
@@ -290,7 +289,7 @@ async def test_daemon_execution_success() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_execution_crash() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
     strategy = MockExecutionStrategy(should_crash=True)
@@ -315,7 +314,7 @@ async def test_daemon_execution_crash() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_missing_manifest() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
     strategy = MockExecutionStrategy()
@@ -332,7 +331,7 @@ async def test_daemon_missing_manifest() -> None:
     # In reality, IPCValidator should reject it first, but if it reaches _dispatch_intent without a manifest,
     # it yields a JSONRPCErrorResponseState indicating Method not found.
     assert pushed["jsonrpc"] == "2.0"
-    assert pushed["id"] == "1"
+    assert pushed["id"] == 1
     # This responds immediately
     assert pushed["error"]["code"] == -32601
     assert "Method not found: Tool 'test_tool' missing from the registry." in pushed["error"]["message"]
@@ -342,7 +341,7 @@ async def test_daemon_missing_manifest() -> None:
 async def test_daemon_preemption_preemptible_task() -> None:
     broker = MockBroker(
         [
-            {"jsonrpc": "2.0", "method": "test", "id": "1"},  # Intent
+            {"jsonrpc": "2.0", "method": "test", "id": 1},  # Intent
             {"type": "barge_in", "target_event_id": "test_event_123"},  # Preemption Signal
         ]
     )
@@ -384,7 +383,7 @@ async def test_daemon_preemption_preemptible_task() -> None:
 async def test_daemon_preemption_sandbox_teardown() -> None:
     broker = MockBroker(
         [
-            {"jsonrpc": "2.0", "method": "test", "id": "1"},  # Intent
+            {"jsonrpc": "2.0", "method": "test", "id": 1},  # Intent
             {"type": "barge_in", "target_event_id": "test_event_123"},  # Preemption Signal
         ]
     )
@@ -455,7 +454,7 @@ async def test_daemon_preemption_no_active_task() -> None:
 async def test_daemon_preemption_non_preemptible_task() -> None:
     broker = MockBroker(
         [
-            {"jsonrpc": "2.0", "method": "test", "id": "1"},  # Intent
+            {"jsonrpc": "2.0", "method": "test", "id": 1},  # Intent
             {"type": "barge_in", "target_event_id": "test_event_123"},  # Preemption Signal
         ]
     )
@@ -495,7 +494,7 @@ async def test_daemon_preemption_non_preemptible_task() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_execution_success_with_scrubbing() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
 
@@ -541,7 +540,7 @@ async def test_daemon_execution_success_with_scrubbing() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_execution_crash_with_scrubbing() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
 
@@ -577,7 +576,7 @@ async def test_daemon_execution_crash_with_scrubbing() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_vault_unsealing_and_injection() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
     strategy = MockExecutionStrategy(result={"some": "data"})
@@ -628,7 +627,7 @@ async def test_daemon_vault_unsealing_and_injection() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_semantic_truncation_routing() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
 
@@ -670,7 +669,7 @@ async def test_daemon_semantic_truncation_routing() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_semantic_extractor_integration() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
 
@@ -712,7 +711,7 @@ async def test_daemon_semantic_extractor_integration() -> None:
 
 @pytest.mark.asyncio
 async def test_daemon_semantic_extractor_native_combination() -> None:
-    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": "1"}])
+    broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
 

@@ -344,7 +344,7 @@ class KinematicExecutionStrategy:
             current_url=current_url,
             viewport_size=viewport_size,
             dom_hash=dom_hash,
-            accessibility_tree_hash="[DEPRECATED_BY_ATOMIC_LOCATORS]",
+            accessibility_tree_hash="a" * 64,
             screenshot_cid=screenshot_cid,
         )
 

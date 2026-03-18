@@ -42,7 +42,7 @@ def get_valid_raw_payload() -> dict[str, Any]:
     return {
         "jsonrpc": "2.0",
         "method": "execute_tool",
-        "id": "123",
+        "id": 123,
         "params": {
             "event_id": "test_event_id",
             "timestamp": 1234567890.0,
@@ -57,10 +57,9 @@ def get_valid_raw_payload() -> dict[str, Any]:
             },
             "zk_proof": {
                 "proof_protocol": "zk-SNARK",
-                "public_inputs_hash": "hash",
+                "public_inputs_hash": "a" * 64,
                 "verifier_key_id": "cid",
                 "cryptographic_blob": "blob",
-                "latent_state_commitments": {},
             },
             "state_hydration": {
                 "epistemic_coordinate": "test_coordinate",
@@ -136,7 +135,7 @@ def test_validator_invalid_rpc_intent() -> None:
     validator = IPCValidator(registry, verifier)
 
     # Missing method
-    payload = {"jsonrpc": "2.0", "id": "123", "params": {}}
+    payload = {"jsonrpc": "2.0", "id": 123, "params": {}}
     result = validator.validate_intent(payload)
 
     assert isinstance(result, JSONRPCErrorResponseState)
