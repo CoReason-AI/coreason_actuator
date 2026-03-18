@@ -78,7 +78,7 @@ class SandboxProviderProtocol(Protocol):
         """Injects unsealed secrets via in-memory tmpfs mounts."""
         ...
 
-    def execute(self, bytecode: bytes) -> Any:
+    async def execute(self, bytecode: bytes) -> Any:
         """Executes the target binary within the physical boundary."""
         ...
 
@@ -116,7 +116,9 @@ class WasmSandboxProvider:
         logger.info(f"Injecting {len(secrets)} secrets into WASM tmpfs")
         self.bwrap_cmd_array.extend(["--tmpfs", "/run/secrets"])
 
-    def execute(self, bytecode: bytes) -> Any:
+    async def execute(self, bytecode: bytes) -> Any:
+        import asyncio
+
         logger.info(f"Executing WASM bytecode ({len(bytecode)} bytes) via wasmtime")
         full_command = [
             "systemd-run",
@@ -131,18 +133,23 @@ class WasmSandboxProvider:
             "-",
         ]
 
+        process = await asyncio.create_subprocess_exec(
+            *full_command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
         try:
-            result = subprocess.run(  # noqa: S603
-                full_command,
-                input=bytecode,
-                capture_output=True,
-                check=True,
-                timeout=10,
-            )
-            return result.stdout.decode("utf-8")
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logger.error(f"WASM execution failed: {e}")
-            raise RuntimeError(f"WASM execution failed: {e}") from e
+            stdout, stderr = await asyncio.wait_for(process.communicate(input=bytecode), timeout=10.0)
+        except TimeoutError as e:
+            import contextlib
+
+            with contextlib.suppress(OSError):
+                process.kill()
+            raise RuntimeError("WASM execution failed: Timeout") from e
+
+        if process.returncode != 0:
+            error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
+            raise RuntimeError(f"WASM execution failed: {error_msg}")
+        return stdout.decode("utf-8") if stdout else ""
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down WASM sandbox (force={force})")
@@ -199,7 +206,9 @@ class RiscvZkvmSandboxProvider:
         logger.info(f"Injecting {len(secrets)} secrets into RISC-V ZKVM tmpfs")
         self.bwrap_cmd_array.extend(["--tmpfs", "/run/secrets"])
 
-    def execute(self, bytecode: bytes) -> Any:
+    async def execute(self, bytecode: bytes) -> Any:
+        import asyncio
+
         logger.info(f"Executing RISC-V bytecode ({len(bytecode)} bytes) via riscv64-unknown-elf-run")
         full_command = [
             "systemd-run",
@@ -213,18 +222,23 @@ class RiscvZkvmSandboxProvider:
             "riscv64-unknown-elf-run",
         ]
 
+        process = await asyncio.create_subprocess_exec(
+            *full_command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
         try:
-            result = subprocess.run(  # noqa: S603
-                full_command,
-                input=bytecode,
-                capture_output=True,
-                check=True,
-                timeout=10,
-            )
-            return result.stdout.decode("utf-8")
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logger.error(f"RISC-V execution failed: {e}")
-            raise RuntimeError(f"RISC-V execution failed: {e}") from e
+            stdout, stderr = await asyncio.wait_for(process.communicate(input=bytecode), timeout=10.0)
+        except TimeoutError as e:
+            import contextlib
+
+            with contextlib.suppress(OSError):
+                process.kill()
+            raise RuntimeError("RISC-V execution failed: Timeout") from e
+
+        if process.returncode != 0:
+            error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
+            raise RuntimeError(f"RISC-V execution failed: {error_msg}")
+        return stdout.decode("utf-8") if stdout else ""
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down RISC-V ZKVM sandbox (force={force})")
@@ -281,7 +295,9 @@ class BpfSandboxProvider:
         logger.info(f"Injecting {len(secrets)} secrets into BPF tmpfs")
         self.bwrap_cmd_array.extend(["--tmpfs", "/run/secrets"])
 
-    def execute(self, bytecode: bytes) -> Any:
+    async def execute(self, bytecode: bytes) -> Any:
+        import asyncio
+
         logger.info(f"Executing BPF bytecode ({len(bytecode)} bytes) via bpftool")
         full_command = [
             "systemd-run",
@@ -299,18 +315,23 @@ class BpfSandboxProvider:
             "/sys/fs/bpf/prog",
         ]
 
+        process = await asyncio.create_subprocess_exec(
+            *full_command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
         try:
-            result = subprocess.run(  # noqa: S603
-                full_command,
-                input=bytecode,
-                capture_output=True,
-                check=True,
-                timeout=10,
-            )
-            return result.stdout.decode("utf-8")
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-            logger.error(f"BPF execution failed: {e}")
-            raise RuntimeError(f"BPF execution failed: {e}") from e
+            stdout, stderr = await asyncio.wait_for(process.communicate(input=bytecode), timeout=10.0)
+        except TimeoutError as e:
+            import contextlib
+
+            with contextlib.suppress(OSError):
+                process.kill()
+            raise RuntimeError("BPF execution failed: Timeout") from e
+
+        if process.returncode != 0:
+            error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
+            raise RuntimeError(f"BPF execution failed: {error_msg}")
+        return stdout.decode("utf-8") if stdout else ""
 
     async def teardown(self, force: bool = False) -> None:
         logger.info(f"Tearing down BPF sandbox (force={force})")
