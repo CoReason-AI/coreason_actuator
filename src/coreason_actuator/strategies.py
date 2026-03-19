@@ -363,20 +363,19 @@ def _run_sync_execution(tool_name: str, parameters: dict[str, Any]) -> Any:  # p
     lock_manager = DummyLockManager()  # pragma: no cover
     strategy = NativeExecutionStrategy(registry=registry, lock_manager=lock_manager)  # type: ignore[arg-type] # pragma: no cover
 
-    intent = ToolInvocationEvent(  # pragma: no cover
+    intent = ToolInvocationEvent.model_construct(  # pragma: no cover
         event_id="0",
         timestamp=0.0,
         tool_name=tool_name,
         parameters=parameters,  # pragma: no cover
-        zk_proof="mock",
-        agent_attestation="mock",  # pragma: no cover
+        zk_proof="mock",  # type: ignore[arg-type]  # pragma: no cover
+        agent_attestation="mock",  # type: ignore[arg-type]  # pragma: no cover
     )  # pragma: no cover
-    manifest = ToolManifest(  # pragma: no cover
+    manifest = ToolManifest.model_construct(  # pragma: no cover
         tool_name=tool_name,  # pragma: no cover
         description="Mock",  # pragma: no cover
-        parameters={},  # pragma: no cover
-        side_effects={},  # pragma: no cover
-        permissions={},  # pragma: no cover
+        side_effects={},  # type: ignore[arg-type]  # pragma: no cover
+        permissions={},  # type: ignore[arg-type]  # pragma: no cover
     )  # pragma: no cover
 
     # For this patch, we run the async execution in a new isolated event loop
