@@ -10,12 +10,12 @@
 
 import asyncio
 import signal
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
 import typer
-from coreason_manifest.spec.ontology import BackpressurePolicy, ToolManifest
+from coreason_manifest.spec.ontology import ActionSpaceManifest, BackpressurePolicy, ToolManifest
 
 from coreason_actuator.daemon import ActuatorDaemon
 from coreason_actuator.ingress import IPCValidator
@@ -31,14 +31,23 @@ app = typer.Typer()
 
 
 class ActionSpaceRegistry(ActionSpaceRegistryProtocol):
-    """A real registry that holds a collection of ActionSpaceManifests."""
+    """A real registry that holds a collection of tools from an ActionSpaceManifest."""
 
-    def __init__(self, tools: list[ToolManifest] | None = None) -> None:
-        self.tools = {tool.name if hasattr(tool, "name") else getattr(tool, "tool_name", "unknown"): tool for tool in (tools or [])}  # type: ignore[attr-defined]
+    def __init__(self, manifest: ActionSpaceManifest | None = None) -> None:
+        self.tools: dict[str, ToolManifest] = {}
+        self._callables: dict[str, Callable[..., Awaitable[Any]]] = {}
+        if manifest:
+            for tool in getattr(manifest, "native_tools", []):
+                name = getattr(tool, "tool_name", getattr(tool, "name", "unknown"))
+                self.tools[name] = tool
 
     def get_tool(self, tool_name: str) -> ToolManifest | None:
         """Retrieves a tool from the registry if it exists."""
         return self.tools.get(tool_name)
+
+    async def get_callable(self, tool_name: str) -> Callable[..., Awaitable[Any]] | None:
+        """Retrieves the registered asynchronous callable for the tool."""
+        return self._callables.get(tool_name)  # pragma: no cover
 
 
 class AsyncLockManager(DistributedLockProtocol):
@@ -72,7 +81,7 @@ class AsyncLockManager(DistributedLockProtocol):
                 self._locks.pop(lock_key, None)
 
 
-@app.command()  # type: ignore[misc]
+@app.command()
 def run() -> None:
     """Bootstraps the ActuatorDaemon and starts the main loop."""
     logger.info("Bootstrapping ActuatorDaemon...")

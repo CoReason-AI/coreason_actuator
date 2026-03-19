@@ -395,15 +395,20 @@ def _run_sync_execution(tool_name: str, parameters: dict[str, Any]) -> Any:  # p
     """Helper to bridge async registry inside a synchronous ProcessPool"""
     import asyncio  # pragma: no cover
 
-    from coreason_manifest.spec.ontology import ToolInvocationEvent, ToolManifest  # pragma: no cover
-
-    from coreason_manifest.spec.ontology import AgentAttestationReceipt, PermissionBoundaryPolicy, SideEffectProfile, ZeroKnowledgeReceipt
+    from coreason_manifest.spec.ontology import (  # pragma: no cover
+        AgentAttestationReceipt,
+        PermissionBoundaryPolicy,
+        SideEffectProfile,
+        ToolInvocationEvent,
+        ToolManifest,
+        ZeroKnowledgeReceipt,
+    )
 
     from coreason_actuator.main import ActionSpaceRegistry, AsyncLockManager  # pragma: no cover
     from coreason_actuator.strategies import NativeExecutionStrategy  # pragma: no cover
 
     # In a real environment, you'd instantiate a fresh registry/engine context here
-    registry = ActionSpaceRegistry()  # type: ignore[assignment]  # pragma: no cover
+    registry = ActionSpaceRegistry()  # pragma: no cover
     lock_manager = AsyncLockManager()  # pragma: no cover
     strategy = NativeExecutionStrategy(registry=registry, lock_manager=lock_manager)  # pragma: no cover
 
@@ -429,8 +434,10 @@ def _run_sync_execution(tool_name: str, parameters: dict[str, Any]) -> Any:  # p
         tool_name=tool_name,
         description="Mock",
         input_schema={},
-        side_effects=SideEffectProfile.model_construct(),  # pragma: no cover
-        permissions=PermissionBoundaryPolicy.model_construct(),  # pragma: no cover
+        side_effects=SideEffectProfile.model_construct(is_idempotent=True, mutates_state=False),  # pragma: no cover
+        permissions=PermissionBoundaryPolicy.model_construct(
+            network_access=False, file_system_mutation_forbidden=True
+        ),  # pragma: no cover
     )  # pragma: no cover
 
     # For this patch, we run the async execution in a new isolated event loop

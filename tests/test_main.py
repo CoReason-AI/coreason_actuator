@@ -8,11 +8,10 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
-import pytest
-
 import asyncio
 
-from coreason_manifest.spec.ontology import ToolManifest, SideEffectProfile, PermissionBoundaryPolicy
+import pytest
+from coreason_manifest.spec.ontology import PermissionBoundaryPolicy, SideEffectProfile, ToolManifest
 
 from coreason_actuator.ipc import IPCBrokerServer
 from coreason_actuator.main import ActionSpaceRegistry, AsyncLockManager, app, run
@@ -51,14 +50,23 @@ def test_action_space_registry() -> None:
     reg = ActionSpaceRegistry()
     assert reg.get_tool("anything") is None
 
+    from coreason_manifest.spec.ontology import ActionSpaceManifest
+
     mock_tool = ToolManifest.model_construct(
         tool_name="test_tool",
         description="test",
         input_schema={},
-        side_effects=SideEffectProfile.model_construct(),
-        permissions=PermissionBoundaryPolicy.model_construct(),
+        side_effects=SideEffectProfile.model_construct(is_idempotent=True, mutates_state=False),
+        permissions=PermissionBoundaryPolicy.model_construct(network_access=False, file_system_mutation_forbidden=True),
     )
-    reg_with_tools = ActionSpaceRegistry([mock_tool])
+    manifest = ActionSpaceManifest.model_construct(
+        action_space_id="test",
+        native_tools=[mock_tool],
+        mcp_servers=[],
+        ephemeral_partitions=[],
+        kinetic_separation=None,
+    )
+    reg_with_tools = ActionSpaceRegistry(manifest)
     assert reg_with_tools.get_tool("test_tool") == mock_tool
 
 
