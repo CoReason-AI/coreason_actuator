@@ -13,27 +13,19 @@ import signal
 from typing import Any
 
 import typer
-from coreason_manifest.spec.ontology import BackpressurePolicy, ToolInvocationEvent, ToolManifest
+from coreason_manifest.spec.ontology import BackpressurePolicy, ToolManifest
 
 from coreason_actuator.daemon import ActuatorDaemon
 from coreason_actuator.ingress import IPCValidator
 from coreason_actuator.interfaces import (
     ActionSpaceRegistryProtocol,
-    CryptographicVerifierProtocol,
     IPCBrokerProtocol,
 )
+from coreason_actuator.security import CryptographicVerifier
 from coreason_actuator.strategies import NativeExecutionStrategy
 from coreason_actuator.utils.logger import logger
 
 app = typer.Typer()
-
-
-class DummyVerifier(CryptographicVerifierProtocol):
-    """A dummy verifier for standalone CLI bootstrapping."""
-
-    def verify(self, intent: ToolInvocationEvent) -> bool:
-        _ = intent
-        return True
 
 
 class DummyIPCBroker(IPCBrokerProtocol):
@@ -74,7 +66,7 @@ def run() -> None:
     logger.info("Bootstrapping ActuatorDaemon...")
 
     registry = DummyRegistry()
-    verifier = DummyVerifier()
+    verifier = CryptographicVerifier()
     broker = DummyIPCBroker()
     validator = IPCValidator(registry=registry, verifier=verifier)
     policy = BackpressurePolicy(max_queue_depth=100, max_concurrent_tool_invocations=10)

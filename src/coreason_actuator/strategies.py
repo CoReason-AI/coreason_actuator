@@ -259,6 +259,48 @@ class MCPClientStrategy:
             "params": intent.parameters or {},
         }
 
+        # If the transport type is stdio, spawn the process via asyncio.subprocess
+        transport_type = getattr(server_manifest.transport, "type", None)
+        if transport_type == "stdio":
+            command = getattr(server_manifest.transport, "command", None)
+            args = getattr(server_manifest.transport, "args", [])
+            env_vars = getattr(server_manifest.transport, "env_vars", {})
+
+            if not command:
+                raise ValueError("Stdio transport requires a 'command'.")
+
+            proc = await asyncio.create_subprocess_exec(
+                command,
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env_vars or None,
+            )
+
+            if proc.stdin is None or proc.stdout is None:
+                raise RuntimeError("Failed to open subprocess pipes.")
+
+            payload = json.dumps(packet).encode() + b"\n"
+            proc.stdin.write(payload)
+            await proc.stdin.drain()
+            proc.stdin.close()
+            await proc.stdin.wait_closed()
+
+            stdout_data = await proc.stdout.readline()
+            response_str = stdout_data.decode("utf-8").strip()
+
+            proc.terminate()
+            await proc.wait()
+
+            if not response_str:
+                raise RuntimeError("MCP server closed stdout without a response.")
+
+            try:
+                return json.loads(response_str)
+            except json.JSONDecodeError as err:
+                raise ValueError(f"Invalid JSON response from MCP server: {response_str}") from err
+
         # Dispatch the packet via the ephemeral transport connection
         return await self.transport.dispatch(server_manifest, packet)
 

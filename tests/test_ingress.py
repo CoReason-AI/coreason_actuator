@@ -14,6 +14,7 @@ from coreason_manifest.spec.ontology import (
     JSONRPCErrorResponseState,
     PermissionBoundaryPolicy,
     SideEffectProfile,
+    TamperFaultEvent,
     ToolInvocationEvent,
     ToolManifest,
 )
@@ -35,7 +36,9 @@ class MockVerifier:
 
     def verify(self, intent: ToolInvocationEvent) -> bool:
         _ = intent
-        return self.should_pass
+        if not self.should_pass:
+            raise TamperFaultEvent("Mock verification failed")
+        return True
 
 
 def get_valid_raw_payload() -> dict[str, Any]:

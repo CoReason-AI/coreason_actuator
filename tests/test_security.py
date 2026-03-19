@@ -8,12 +8,70 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
+import hashlib
 from typing import Any
+from unittest.mock import MagicMock
 
+import pytest
+from coreason_manifest.spec.ontology import TamperFaultEvent, ToolInvocationEvent
 from hypothesis import given
 from hypothesis import strategies as st
 
-from coreason_actuator.security import MaskingFunctor
+from coreason_actuator.security import CryptographicVerifier, MaskingFunctor
+
+
+def test_cryptographic_verifier_no_attestation() -> None:
+    verifier = CryptographicVerifier()
+    intent = MagicMock(spec=ToolInvocationEvent)
+    intent.agent_attestation = None
+    intent.zk_proof = None
+
+    with pytest.raises(TamperFaultEvent, match=r"No cryptographic attestation provided\."):
+        verifier.verify(intent)
+
+
+def test_cryptographic_verifier_invalid_agent_attestation() -> None:
+    verifier = CryptographicVerifier()
+    intent = MagicMock(spec=ToolInvocationEvent)
+    intent.event_id = "test_event"
+    intent.agent_attestation = MagicMock()
+    intent.agent_attestation.developer_signature = "invalid_hash"
+
+    with pytest.raises(TamperFaultEvent, match=r"agent_attestation validation failed\."):
+        verifier.verify(intent)
+
+
+def test_cryptographic_verifier_valid_agent_attestation() -> None:
+    verifier = CryptographicVerifier()
+    intent = MagicMock(spec=ToolInvocationEvent)
+    intent.event_id = "test_event"
+    intent.agent_attestation = MagicMock()
+    intent.agent_attestation.developer_signature = hashlib.sha256(b"test_event").hexdigest()
+
+    assert verifier.verify(intent) is True
+
+
+def test_cryptographic_verifier_invalid_zk_proof() -> None:
+    verifier = CryptographicVerifier()
+    intent = MagicMock(spec=ToolInvocationEvent)
+    intent.event_id = "test_event"
+    intent.agent_attestation = None
+    intent.zk_proof = MagicMock()
+    intent.zk_proof.public_inputs_hash = "invalid_hash"
+
+    with pytest.raises(TamperFaultEvent, match=r"zk_proof validation failed\."):
+        verifier.verify(intent)
+
+
+def test_cryptographic_verifier_valid_zk_proof() -> None:
+    verifier = CryptographicVerifier()
+    intent = MagicMock(spec=ToolInvocationEvent)
+    intent.event_id = "test_event"
+    intent.agent_attestation = None
+    intent.zk_proof = MagicMock()
+    intent.zk_proof.public_inputs_hash = hashlib.sha256(b"test_event").hexdigest()
+
+    assert verifier.verify(intent) is True
 
 
 def test_masking_functor_basic() -> None:

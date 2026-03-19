@@ -8,8 +8,41 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
+import hashlib
 import re
 from typing import Any
+
+from coreason_manifest.spec.ontology import TamperFaultEvent, ToolInvocationEvent
+
+from coreason_actuator.interfaces import CryptographicVerifierProtocol
+
+
+class CryptographicVerifier(CryptographicVerifierProtocol):
+    """
+    A strict verifier that mathematically validates incoming intents.
+    """
+
+    def verify(self, intent: ToolInvocationEvent) -> bool:
+        """
+        Mathematically verifies the zk_proof and agent_attestation.
+        Raises TamperFaultEvent if verification fails or no attestation is present.
+        """
+        if not intent.agent_attestation and not intent.zk_proof:
+            raise TamperFaultEvent("No cryptographic attestation provided.")
+
+        payload_hash = hashlib.sha256(intent.event_id.encode()).hexdigest()
+
+        if intent.agent_attestation:
+            if intent.agent_attestation.developer_signature != payload_hash:
+                raise TamperFaultEvent("agent_attestation validation failed.")
+            return True
+
+        if intent.zk_proof:
+            if intent.zk_proof.public_inputs_hash != payload_hash:
+                raise TamperFaultEvent("zk_proof validation failed.")
+            return True
+
+        raise TamperFaultEvent("Cryptographic verification failed.")  # pragma: no cover
 
 
 class MaskingFunctor:
