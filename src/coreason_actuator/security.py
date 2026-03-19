@@ -9,6 +9,7 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import hashlib
+import json
 import re
 from typing import Any
 
@@ -30,7 +31,7 @@ class CryptographicVerifier(CryptographicVerifierProtocol):
         if not intent.agent_attestation and not intent.zk_proof:
             raise TamperFaultEvent("No cryptographic attestation provided.")
 
-        payload_hash = hashlib.sha256(intent.event_id.encode()).hexdigest()
+        payload_hash = hashlib.sha256(json.dumps(intent.parameters, sort_keys=True).encode()).hexdigest()
 
         if intent.agent_attestation:
             if intent.agent_attestation.developer_signature != payload_hash:

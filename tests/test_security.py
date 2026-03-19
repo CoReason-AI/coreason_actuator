@@ -9,6 +9,7 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import hashlib
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -30,10 +31,14 @@ def test_cryptographic_verifier_no_attestation() -> None:
         verifier.verify(intent)
 
 
+
+
+
 def test_cryptographic_verifier_invalid_agent_attestation() -> None:
     verifier = CryptographicVerifier()
     intent = MagicMock(spec=ToolInvocationEvent)
     intent.event_id = "test_event"
+    intent.parameters = {"param": "value"}
     intent.agent_attestation = MagicMock()
     intent.agent_attestation.developer_signature = "invalid_hash"
 
@@ -45,8 +50,10 @@ def test_cryptographic_verifier_valid_agent_attestation() -> None:
     verifier = CryptographicVerifier()
     intent = MagicMock(spec=ToolInvocationEvent)
     intent.event_id = "test_event"
+    intent.parameters = {"param": "value"}
     intent.agent_attestation = MagicMock()
-    intent.agent_attestation.developer_signature = hashlib.sha256(b"test_event").hexdigest()
+    expected_hash = hashlib.sha256(json.dumps(intent.parameters, sort_keys=True).encode()).hexdigest()
+    intent.agent_attestation.developer_signature = expected_hash
 
     assert verifier.verify(intent) is True
 
@@ -55,6 +62,7 @@ def test_cryptographic_verifier_invalid_zk_proof() -> None:
     verifier = CryptographicVerifier()
     intent = MagicMock(spec=ToolInvocationEvent)
     intent.event_id = "test_event"
+    intent.parameters = {"param": "value"}
     intent.agent_attestation = None
     intent.zk_proof = MagicMock()
     intent.zk_proof.public_inputs_hash = "invalid_hash"
@@ -67,9 +75,11 @@ def test_cryptographic_verifier_valid_zk_proof() -> None:
     verifier = CryptographicVerifier()
     intent = MagicMock(spec=ToolInvocationEvent)
     intent.event_id = "test_event"
+    intent.parameters = {"param": "value"}
     intent.agent_attestation = None
     intent.zk_proof = MagicMock()
-    intent.zk_proof.public_inputs_hash = hashlib.sha256(b"test_event").hexdigest()
+    expected_hash = hashlib.sha256(json.dumps(intent.parameters, sort_keys=True).encode()).hexdigest()
+    intent.zk_proof.public_inputs_hash = expected_hash
 
     assert verifier.verify(intent) is True
 

@@ -10,6 +10,8 @@
 
 import asyncio
 import signal
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import typer
@@ -19,45 +21,55 @@ from coreason_actuator.daemon import ActuatorDaemon
 from coreason_actuator.ingress import IPCValidator
 from coreason_actuator.interfaces import (
     ActionSpaceRegistryProtocol,
-    IPCBrokerProtocol,
 )
+from coreason_actuator.ipc import IPCBrokerServer
 from coreason_actuator.security import CryptographicVerifier
-from coreason_actuator.strategies import NativeExecutionStrategy
+from coreason_actuator.strategies import DistributedLockProtocol, NativeExecutionStrategy
 from coreason_actuator.utils.logger import logger
 
 app = typer.Typer()
 
 
-class DummyIPCBroker(IPCBrokerProtocol):
-    """A dummy IPC broker for standalone CLI bootstrapping."""
+class ActionSpaceRegistry(ActionSpaceRegistryProtocol):
+    """A real registry that holds a collection of ActionSpaceManifests."""
 
-    def __init__(self) -> None:
-        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-
-    async def pull(self) -> dict[str, Any]:
-        return await self.queue.get()
-
-    async def push(self, message: dict[str, Any]) -> None:
-        logger.info(f"Pushed to broker: {message}")
-
-
-class DummyRegistry(ActionSpaceRegistryProtocol):
-    """A dummy registry for standalone CLI bootstrapping."""
+    def __init__(self, tools: list[ToolManifest] | None = None) -> None:
+        self.tools = {tool.name if hasattr(tool, "name") else getattr(tool, "tool_name", "unknown"): tool for tool in (tools or [])}  # type: ignore[attr-defined]
 
     def get_tool(self, tool_name: str) -> ToolManifest | None:
-        _ = tool_name
-        return None
+        """Retrieves a tool from the registry if it exists."""
+        return self.tools.get(tool_name)
 
 
-class DummyLockManager:
-    """A dummy lock manager for standalone CLI bootstrapping."""
+class AsyncLockManager(DistributedLockProtocol):
+    """A real async lock manager using asyncio.Lock."""
 
-    def acquire_lock(self, resource_id: str, timeout: float = 10.0) -> bool:
-        _ = resource_id, timeout
-        return True
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
 
-    def release_lock(self, resource_id: str) -> None:
-        _ = resource_id
+    @asynccontextmanager
+    async def acquire(self, lock_key: str, ttl: int | None = None) -> AsyncIterator[Any]:
+        """Acquires a lock for the given key."""
+        if lock_key not in self._locks:
+            self._locks[lock_key] = asyncio.Lock()
+        lock = self._locks[lock_key]
+
+        if ttl is not None:
+            # Wrap the lock acquisition with a timeout matching the requested TTL.
+            try:
+                await asyncio.wait_for(lock.acquire(), timeout=ttl / 1000.0)
+            except TimeoutError as e:
+                raise TimeoutError(f"Failed to acquire lock for {lock_key} within TTL {ttl}ms") from e
+        else:
+            await lock.acquire()
+
+        try:
+            yield lock
+        finally:
+            lock.release()
+            # Optionally clean up unused locks
+            if not lock.locked():
+                self._locks.pop(lock_key, None)
 
 
 @app.command()  # type: ignore[misc]
@@ -65,13 +77,18 @@ def run() -> None:
     """Bootstraps the ActuatorDaemon and starts the main loop."""
     logger.info("Bootstrapping ActuatorDaemon...")
 
-    registry = DummyRegistry()
+    # Instantiate real components
+    registry = ActionSpaceRegistry()
     verifier = CryptographicVerifier()
-    broker = DummyIPCBroker()
+
+    # Typically, URI would come from SystemConfigurationManifest
+    broker = IPCBrokerServer(uri="tcp://0.0.0.0:5555")
+
     validator = IPCValidator(registry=registry, verifier=verifier)
     policy = BackpressurePolicy(max_queue_depth=100, max_concurrent_tool_invocations=10)
-    lock_manager = DummyLockManager()
-    strategy = NativeExecutionStrategy(registry=registry, lock_manager=lock_manager)  # type: ignore
+    lock_manager = AsyncLockManager()
+
+    strategy = NativeExecutionStrategy(registry=registry, lock_manager=lock_manager)
 
     daemon = ActuatorDaemon(
         broker=broker,
@@ -83,14 +100,23 @@ def run() -> None:
 
     loop = asyncio.get_event_loop()
 
+    _bg_tasks: set[asyncio.Task[Any]] = set()
+
     def handle_sigterm() -> None:
         logger.info("Received SIGTERM/SIGINT. Initiating graceful shutdown...")
+        # Add graceful socket closing to the shutdown handler via task
+        if hasattr(broker, "close"):
+            task = loop.create_task(broker.close())
+            _bg_tasks.add(task)
+            task.add_done_callback(_bg_tasks.discard)
         daemon.stop()
 
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, handle_sigterm)
 
     try:
+        # We need to start the broker before the daemon
+        loop.run_until_complete(broker.start())
         loop.run_until_complete(daemon.start())
     except asyncio.CancelledError:
         pass
