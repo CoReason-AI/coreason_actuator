@@ -68,7 +68,7 @@ class DummyLockManager:
         _ = resource_id
 
 
-@app.command()
+@app.command()  # type: ignore[misc]
 def run() -> None:
     """Bootstraps the ActuatorDaemon and starts the main loop."""
     logger.info("Bootstrapping ActuatorDaemon...")

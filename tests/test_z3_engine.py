@@ -1,4 +1,5 @@
 import json
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -22,7 +23,7 @@ async def test_symbolic_sandbox_provider() -> None:
     # Test provision
     part = EphemeralNamespacePartitionState.model_construct(
         partition_id="z3-part",
-        execution_runtime="z3-solver",
+        execution_runtime=cast("Any", "z3-solver"),
         authorized_bytecode_hashes=[],
         max_ttl_seconds=10,
         max_vram_mb=512,
@@ -69,7 +70,7 @@ async def test_symbolic_sandbox_provider() -> None:
 def test_sandbox_factory_z3() -> None:
     part = EphemeralNamespacePartitionState.model_construct(
         partition_id="z3-part",
-        execution_runtime="z3-solver",
+        execution_runtime=cast("Any", "z3-solver"),
         authorized_bytecode_hashes=[],
         max_ttl_seconds=10,
         max_vram_mb=512,
@@ -101,7 +102,12 @@ async def test_engine_zk_receipt() -> None:
         ),
     )
     # Add hydration for RISC-V ZKVM
-    hydration = StateHydrationManifest.model_construct()  # type: ignore[call-arg]
+    hydration = cast(
+        "Any",
+        StateHydrationManifest.model_construct(
+            epistemic_coordinate="a", crystallized_ledger_cids=[], working_context_variables={}, max_retained_tokens=100
+        ),
+    )
     object.__setattr__(
         hydration,
         "session_state",
@@ -123,7 +129,11 @@ async def test_engine_zk_receipt() -> None:
     object.__setattr__(intent, "state_hydration", hydration)
 
     manifest = ToolManifest.model_construct(
-        tool_name="test_tool", description="mock", input_schema={}, side_effects={}, permissions={}
+        tool_name="test_tool",
+        description="mock",
+        input_schema={},
+        side_effects=cast("Any", {}),
+        permissions=cast("Any", {}),
     )
 
     observation = ObservationEvent.model_construct(
@@ -143,10 +153,10 @@ async def test_engine_zk_receipt() -> None:
         "verifier_key_id": "mock",
         "cryptographic_blob": {"stdout": "blob"},
     }
-    broker.pull.return_value = obs_dict  # type: ignore
+    cast("AsyncMock", broker.pull).return_value = obs_dict
 
     # Mock engine method directly
-    engine.broker.pull.return_value = obs_dict
+    cast("AsyncMock", engine.broker.pull).return_value = obs_dict
 
     response = await engine.execute(intent, manifest)
 

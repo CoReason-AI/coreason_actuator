@@ -393,7 +393,7 @@ class SymbolicSandboxProvider:
         import asyncio
         import json
 
-        import z3  # type: ignore
+        import z3
 
         logger.info(f"Executing Symbolic bytecode ({len(bytecode)} bytes) via z3-solver")
 
@@ -472,7 +472,7 @@ class SandboxProviderFactory:
     @staticmethod
     def create(partition_state: EphemeralNamespacePartitionState) -> SandboxProviderProtocol:
         runtime = partition_state.execution_runtime
-        if runtime == "z3-solver":  # type: ignore[comparison-overlap]
+        if runtime == "z3-solver":
             return SymbolicSandboxProvider()
         if runtime == "wasm32-wasi":
             return WasmSandboxProvider()
