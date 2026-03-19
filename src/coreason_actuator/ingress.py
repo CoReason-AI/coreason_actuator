@@ -15,6 +15,7 @@ from coreason_manifest.spec.ontology import (
     JSONRPCErrorResponseState,
     JSONRPCErrorState,
     StateHydrationManifest,
+    TamperFaultEvent,
     ToolInvocationEvent,
 )
 from pydantic import ValidationError
@@ -101,13 +102,15 @@ class IPCValidator:
         object.__setattr__(tool_invocation, "state_hydration", state_hydration_manifest)
 
         # Mathematical verification of ZK proof and agent attestation
-        if not self.verifier.verify(tool_invocation):
+        try:
+            self.verifier.verify(tool_invocation)
+        except TamperFaultEvent as e:
             return JSONRPCErrorResponseState(
                 jsonrpc="2.0",
                 id=intent.id,
                 error=JSONRPCErrorState(
                     code=403,
-                    message="Cryptographic verification failed: Invalid zk_proof or agent_attestation.",
+                    message=f"Cryptographic verification failed: {e!s}",
                 ),
             )
 

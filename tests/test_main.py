@@ -10,7 +10,7 @@
 
 import pytest
 
-from coreason_actuator.main import DummyIPCBroker, DummyRegistry, DummyVerifier, app, run
+from coreason_actuator.main import DummyIPCBroker, DummyRegistry, app, run
 
 
 def test_app_initialization() -> None:
@@ -37,13 +37,6 @@ async def test_dummy_broker() -> None:
 def test_dummy_registry() -> None:
     reg = DummyRegistry()
     assert reg.get_tool("anything") is None
-
-
-def test_dummy_verifier() -> None:
-    from unittest.mock import MagicMock
-
-    verifier = DummyVerifier()
-    assert verifier.verify(MagicMock()) is True
 
 
 def test_dummy_lock_manager() -> None:

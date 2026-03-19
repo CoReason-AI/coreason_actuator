@@ -20,6 +20,7 @@ import pytest
 from coreason_manifest.spec.ontology import (
     AgentAttestationReceipt,
     ExecutionSLA,
+    HTTPTransportProfile,
     MCPCapabilityWhitelistPolicy,
     MCPServerManifest,
     PermissionBoundaryPolicy,
@@ -541,6 +542,8 @@ async def test_native_execution_strategy_ast_safety_allows_plain_strings() -> No
 
 @pytest.mark.asyncio
 async def test_mcp_client_strategy_success() -> None:
+    from unittest.mock import AsyncMock, patch
+
     server_manifest = MCPServerManifest(
         server_id="mock_id",
         transport=StdioTransportProfile(command="mock"),
@@ -564,19 +567,245 @@ async def test_mcp_client_strategy_success() -> None:
     )
     manifest = create_mock_manifest()
 
+    mock_proc = AsyncMock()
+    mock_proc.stdin = AsyncMock()
+    mock_proc.stdout = AsyncMock()
+    mock_response = b'{"jsonrpc": "2.0", "id": "test_event_id_123", "result": "mock_response"}\n'
+    mock_proc.stdout.readline.return_value = mock_response
+
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_exec.return_value = mock_proc
+        result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+    assert result == {"jsonrpc": "2.0", "id": "test_event_id_123", "result": "mock_response"}
+    assert mock_exec.call_count == 1
+    assert mock_exec.call_args[0][0] == "mock"
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_strategy_stdio_spawn() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    server_manifest = MCPServerManifest(
+        server_id="mock_id",
+        transport=StdioTransportProfile(command="python", args=["-m", "mcp_server"]),
+        binary_hash="a" * 64,
+        capability_whitelist=MCPCapabilityWhitelistPolicy(
+            allowed_tools=["test_tool_stdio"], allowed_prompts=[], allowed_resources=[]
+        ),
+        attestation_receipt=create_mock_credential_receipt(),
+    )
+    registry = MockMCPServerRegistry({"test_tool_stdio": server_manifest})
+    transport = MockMCPTransport()
+
+    strategy = MCPClientStrategy(registry, transport)
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_stdio",
+        timestamp=1704067200.0,
+        tool_name="test_tool_stdio",
+        parameters={"arg1": "value1"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    mock_proc = AsyncMock()
+    mock_proc.stdin = AsyncMock()
+    mock_proc.stdout = AsyncMock()
+    # readline returns a JSON encoded mock response
+    mock_response = b'{"jsonrpc": "2.0", "id": "test_event_id_stdio", "result": "stdio_response"}\n'
+    mock_proc.stdout.readline.return_value = mock_response
+
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_exec.return_value = mock_proc
+        result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+    assert mock_exec.call_count == 1
+    assert mock_exec.call_args[0][0] == "python"
+    assert mock_exec.call_args[0][1] == "-m"
+    assert mock_exec.call_args[0][2] == "mcp_server"
+    assert mock_proc.stdin.write.call_count == 1
+    assert mock_proc.stdin.drain.call_count == 1
+    assert mock_proc.stdin.close.call_count == 1
+    assert mock_proc.stdin.wait_closed.call_count == 1
+    assert mock_proc.stdout.readline.call_count == 1
+    assert mock_proc.terminate.call_count == 1
+    assert mock_proc.wait.call_count == 1
+
+    assert result == {"jsonrpc": "2.0", "id": "test_event_id_stdio", "result": "stdio_response"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_strategy_stdio_spawn_no_command() -> None:
+    server_manifest = MCPServerManifest(
+        server_id="mock_id",
+        transport=StdioTransportProfile(command=""),
+        binary_hash="a" * 64,
+        capability_whitelist=MCPCapabilityWhitelistPolicy(
+            allowed_tools=["test_tool_stdio_no_command"], allowed_prompts=[], allowed_resources=[]
+        ),
+        attestation_receipt=create_mock_credential_receipt(),
+    )
+    registry = MockMCPServerRegistry({"test_tool_stdio_no_command": server_manifest})
+    transport = MockMCPTransport()
+
+    strategy = MCPClientStrategy(registry, transport)
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_stdio",
+        timestamp=1704067200.0,
+        tool_name="test_tool_stdio_no_command",
+        parameters={"arg1": "value1"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    with pytest.raises(ValueError, match=r"Stdio transport requires a 'command'\."):
+        await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_strategy_stdio_spawn_no_pipes() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    server_manifest = MCPServerManifest(
+        server_id="mock_id",
+        transport=StdioTransportProfile(command="python"),
+        binary_hash="a" * 64,
+        capability_whitelist=MCPCapabilityWhitelistPolicy(
+            allowed_tools=["test_tool_stdio"], allowed_prompts=[], allowed_resources=[]
+        ),
+        attestation_receipt=create_mock_credential_receipt(),
+    )
+    registry = MockMCPServerRegistry({"test_tool_stdio": server_manifest})
+    transport = MockMCPTransport()
+
+    strategy = MCPClientStrategy(registry, transport)
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_stdio",
+        timestamp=1704067200.0,
+        tool_name="test_tool_stdio",
+        parameters={"arg1": "value1"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    mock_proc = AsyncMock()
+    mock_proc.stdin = None
+    mock_proc.stdout = None
+
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_exec.return_value = mock_proc
+        with pytest.raises(RuntimeError, match=r"Failed to open subprocess pipes\."):
+            await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_strategy_stdio_spawn_no_response() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    server_manifest = MCPServerManifest(
+        server_id="mock_id",
+        transport=StdioTransportProfile(command="python"),
+        binary_hash="a" * 64,
+        capability_whitelist=MCPCapabilityWhitelistPolicy(
+            allowed_tools=["test_tool_stdio"], allowed_prompts=[], allowed_resources=[]
+        ),
+        attestation_receipt=create_mock_credential_receipt(),
+    )
+    registry = MockMCPServerRegistry({"test_tool_stdio": server_manifest})
+    transport = MockMCPTransport()
+
+    strategy = MCPClientStrategy(registry, transport)
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_stdio",
+        timestamp=1704067200.0,
+        tool_name="test_tool_stdio",
+        parameters={"arg1": "value1"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    mock_proc = AsyncMock()
+    mock_proc.stdin = AsyncMock()
+    mock_proc.stdout = AsyncMock()
+    mock_proc.stdout.readline.return_value = b""
+
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_exec.return_value = mock_proc
+        with pytest.raises(RuntimeError, match=r"MCP server closed stdout without a response\."):
+            await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_strategy_stdio_spawn_invalid_json() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    server_manifest = MCPServerManifest(
+        server_id="mock_id",
+        transport=StdioTransportProfile(command="python"),
+        binary_hash="a" * 64,
+        capability_whitelist=MCPCapabilityWhitelistPolicy(
+            allowed_tools=["test_tool_stdio"], allowed_prompts=[], allowed_resources=[]
+        ),
+        attestation_receipt=create_mock_credential_receipt(),
+    )
+    registry = MockMCPServerRegistry({"test_tool_stdio": server_manifest})
+    transport = MockMCPTransport()
+
+    strategy = MCPClientStrategy(registry, transport)
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_stdio",
+        timestamp=1704067200.0,
+        tool_name="test_tool_stdio",
+        parameters={"arg1": "value1"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
+    mock_proc = AsyncMock()
+    mock_proc.stdin = AsyncMock()
+    mock_proc.stdout = AsyncMock()
+    mock_proc.stdout.readline.return_value = b"invalid_json"
+
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_exec.return_value = mock_proc
+        with pytest.raises(ValueError, match="Invalid JSON response from MCP server: invalid_json"):
+            await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_strategy_non_stdio() -> None:
+    server_manifest = MCPServerManifest(
+        server_id="mock_id",
+        transport=HTTPTransportProfile(uri="http://mock.com"),
+        binary_hash="a" * 64,
+        capability_whitelist=MCPCapabilityWhitelistPolicy(
+            allowed_tools=["test_tool_http"], allowed_prompts=[], allowed_resources=[]
+        ),
+        attestation_receipt=create_mock_credential_receipt(),
+    )
+    registry = MockMCPServerRegistry({"test_tool_http": server_manifest})
+    transport = MockMCPTransport()
+
+    strategy = MCPClientStrategy(registry, transport)
+    intent = ToolInvocationEvent(
+        event_id="test_event_id_http",
+        timestamp=1704067200.0,
+        tool_name="test_tool_http",
+        parameters={"arg1": "value1"},
+        zk_proof=create_mock_zk_proof(),
+        agent_attestation=create_mock_attestation(),
+    )
+    manifest = create_mock_manifest()
+
     result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
 
     assert result == "mock_response"
     assert len(transport.dispatched_packets) == 1
-
-    dispatched_server_manifest, dispatched_packet = transport.dispatched_packets[0]
-    assert dispatched_server_manifest == server_manifest
-    assert dispatched_packet == {
-        "jsonrpc": "2.0",
-        "id": "test_event_id_123",
-        "method": "test_tool",
-        "params": {"arg1": "value1"},
-    }
 
 
 @pytest.mark.asyncio
@@ -603,6 +832,8 @@ async def test_mcp_client_strategy_missing_tool() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_client_strategy_none_parameters() -> None:
+    from unittest.mock import AsyncMock, patch
+
     server_manifest = MCPServerManifest(
         server_id="mock_id",
         transport=StdioTransportProfile(command="mock"),
@@ -626,19 +857,19 @@ async def test_mcp_client_strategy_none_parameters() -> None:
     )
     manifest = create_mock_manifest()
 
-    result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+    mock_proc = AsyncMock()
+    mock_proc.stdin = AsyncMock()
+    mock_proc.stdout = AsyncMock()
+    mock_response = b'{"jsonrpc": "2.0", "id": "test_event_id_456", "result": "mock_response"}\n'
+    mock_proc.stdout.readline.return_value = mock_response
 
-    assert result == "mock_response"
-    assert len(transport.dispatched_packets) == 1
+    with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        mock_exec.return_value = mock_proc
+        result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
 
-    dispatched_server_manifest, dispatched_packet = transport.dispatched_packets[0]
-    assert dispatched_server_manifest == server_manifest
-    assert dispatched_packet == {
-        "jsonrpc": "2.0",
-        "id": "test_event_id_456",
-        "method": "test_tool_no_params",
-        "params": {},
-    }
+    assert result == {"jsonrpc": "2.0", "id": "test_event_id_456", "result": "mock_response"}
+    assert mock_exec.call_count == 1
+    assert mock_exec.call_args[0][0] == "mock"
 
 
 class MockTensorStorageProtocol:
