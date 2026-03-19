@@ -197,7 +197,7 @@ async def test_riscv_provider_methods() -> None:
         mock_exec.return_value = mock_process
 
         res = await provider.execute(b"test")
-        assert res == "RISC-V execution mock success"
+        assert res == ("RISC-V execution mock success", {"stdout": "RISC-V execution mock success"})
 
         execute_call = mock_exec.call_args_list[0]
         called_cmd = execute_call[0]
