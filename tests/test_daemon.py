@@ -76,12 +76,10 @@ class MockValidator:
             tool_name="test_tool",
             parameters={},
             zk_proof=ZeroKnowledgeReceipt.model_construct(
-                {
-                    "proof_protocol": "zk-SNARK",
-                    "public_inputs_hash": "a" * 64,
-                    "verifier_key_id": "b",
-                    "cryptographic_blob": "c",
-                }
+                proof_protocol="zk-STARK",
+                public_inputs_hash="mock",
+                verifier_key_id="mock",
+                cryptographic_blob="{'mock': 'true'}",
             ),
             agent_attestation=AgentAttestationReceipt.model_validate(
                 {
