@@ -37,7 +37,14 @@ class MockIPCBroker:
 class MockActuatorDaemon:
     def __init__(self) -> None:
         self.started = False
-        self._main_task = None
+        self._running_task: asyncio.Task[Any] | None = None
+
+    @property
+    def is_running(self) -> bool:
+        return self._running_task is not None
+
+    def register_task(self, task: asyncio.Task[Any]) -> None:
+        self._running_task = task
 
     async def start(self) -> None:
         self.started = True
@@ -113,7 +120,7 @@ async def test_engine_execute_success() -> None:
 
     # Assertions
     assert result == expected_response
-    assert getattr(daemon, "_main_task", None) is not None
+    assert daemon.is_running is True
 
     assert len(broker.pushed_messages) == 1
     pushed = broker.pushed_messages[0]

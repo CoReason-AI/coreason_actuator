@@ -34,12 +34,12 @@ class ActuatorEngine:
     async def _start_daemon_if_needed(self) -> None:
         """Starts the background ActuatorDaemon if it isn't running."""
         # Check if the daemon has a running task or loop
-        if getattr(self.daemon, "_main_task", None) is None:
+        if not self.daemon.is_running:
             logger.info("Starting ActuatorDaemon in background from ActuatorEngine")
             task = asyncio.create_task(self.daemon.start())
             self._bg_tasks.add(task)
             task.add_done_callback(self._bg_tasks.discard)
-            self.daemon._main_task = task  # type: ignore
+            self.daemon.register_task(task)
 
     async def execute(
         self, intent: ToolInvocationEvent, manifest: ToolManifest, eviction_policy: EvictionPolicy | None = None
