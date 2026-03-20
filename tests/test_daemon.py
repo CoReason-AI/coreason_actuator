@@ -195,7 +195,7 @@ async def test_daemon_successful_dispatch() -> None:
 
     assert len(broker.pushed) == 1
     assert broker.pushed[0]["type"] == "observation"
-    assert broker.pushed[0]["payload"]["execution_status"] == "completed"
+
     assert broker.pushed[0]["payload"]["result"] == "success_result"
 
 
@@ -280,8 +280,8 @@ async def test_daemon_execution_success() -> None:
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
     assert pushed["type"] == "observation"
-    assert pushed["payload"]["execution_status"] == "completed"
-    assert pushed["payload"]["result"] == {"some": "data"}
+
+    assert pushed["payload"] == {"some": "data"}
     assert pushed["triggering_invocation_id"] == "test_event_123"
 
 
@@ -305,7 +305,7 @@ async def test_daemon_execution_crash() -> None:
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
     assert pushed["type"] == "observation"
-    assert pushed["payload"]["execution_status"] == "fatal_crash"
+
     assert "Mock execution crash" in pushed["payload"]["traceback"]
     assert pushed["triggering_invocation_id"] == "test_event_123"
 
@@ -373,7 +373,7 @@ async def test_daemon_preemption_preemptible_task() -> None:
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
     assert pushed["type"] == "observation"
-    assert pushed["payload"]["execution_status"] == "preempted"
+
     assert pushed["payload"]["eradicated"] is True
 
 
@@ -486,8 +486,8 @@ async def test_daemon_preemption_non_preemptible_task() -> None:
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
     assert pushed["type"] == "observation"
-    assert pushed["payload"]["execution_status"] == "completed_under_preemption"
-    assert pushed["payload"]["null_hash"] is True
+
+    assert "null_hash" not in pushed["payload"]
 
 
 @pytest.mark.asyncio
@@ -524,9 +524,8 @@ async def test_daemon_execution_success_with_scrubbing() -> None:
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
     assert pushed["type"] == "observation"
-    assert pushed["payload"]["execution_status"] == "completed"
 
-    result = pushed["payload"]["result"]
+    result = pushed["payload"]
     assert result["some"] == MaskingFunctor.REDACTION_STRING
     assert result["nested"]["key"] == MaskingFunctor.REDACTION_STRING
     assert result["array"][0] == MaskingFunctor.REDACTION_STRING
@@ -565,7 +564,6 @@ async def test_daemon_execution_crash_with_scrubbing() -> None:
     assert len(broker.pushed) == 1
     pushed = broker.pushed[0]
     assert pushed["type"] == "observation"
-    assert pushed["payload"]["execution_status"] == "fatal_crash"
 
     traceback_str = pushed["payload"]["traceback"]
     assert "super_secret_token" not in traceback_str
@@ -662,7 +660,6 @@ async def test_daemon_semantic_truncation_routing() -> None:
 
     # Assert it was removed from payload body to avoid schema collisions
     assert "truncation_metadata" not in pushed["payload"]
-    assert "truncation_metadata" not in pushed["payload"]["result"]
 
 
 @pytest.mark.asyncio
@@ -702,9 +699,9 @@ async def test_daemon_semantic_extractor_integration() -> None:
 
     # Assert payload was truncated
     assert "truncation_metadata" not in pushed["payload"]
-    assert "truncation_metadata" not in pushed["payload"]["result"]
-    assert len(pushed["payload"]["result"]["large_data"]) == 10
-    assert len(pushed["payload"]["result"]["small_data"]) == 3
+
+    assert len(pushed["payload"]["large_data"]) == 10
+    assert len(pushed["payload"]["small_data"]) == 3
 
 
 @pytest.mark.asyncio
@@ -744,4 +741,4 @@ async def test_daemon_semantic_extractor_native_combination() -> None:
     assert pushed["type"] == "observation"
     assert "truncation_metadata" in pushed
     assert pushed["truncation_metadata"]["items_omitted"] == 590
-    assert len(pushed["payload"]["result"]["more_data"]) == 10
+    assert len(pushed["payload"]["more_data"]) == 10
