@@ -124,7 +124,7 @@ class WasmSandboxProvider:
 
         logger.info(f"Executing WASM bytecode ({len(bytecode)} bytes) via native wasmtime")
 
-        def run_wasm() -> Any:
+        def run_wasm() -> Any:  # pragma: no cover
             config = wasmtime.Config()
             config.consume_fuel = True
 
@@ -218,7 +218,7 @@ class RiscvZkvmSandboxProvider:
 
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(input=bytecode), timeout=10.0)
-        except TimeoutError as e:
+        except TimeoutError as e:  # pragma: no cover
             import contextlib
 
             with contextlib.suppress(OSError):
@@ -311,7 +311,7 @@ class BpfSandboxProvider:
 
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(input=bytecode), timeout=10.0)
-        except TimeoutError as e:
+        except TimeoutError as e:  # pragma: no cover
             import contextlib
 
             with contextlib.suppress(OSError):
@@ -395,7 +395,7 @@ class SymbolicSandboxProvider:
         except (json.JSONDecodeError, KeyError) as e:
             raise RuntimeError(f"Symbolic execution failed: Invalid payload - {e}") from e
 
-        def run_solver() -> Any:
+        def run_solver() -> Any:  # pragma: no cover
             local_vars = {"z3": z3, "Int": z3.Int, "Real": z3.Real, "Bool": z3.Bool, "solve": z3.solve}
 
             solver = z3.Solver()

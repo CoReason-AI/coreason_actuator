@@ -10,6 +10,7 @@
 
 import hashlib
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 from coreason_manifest.spec.ontology import TensorStructuralFormatProfile
@@ -65,6 +66,56 @@ def test_semantic_extractor_root_array_truncation() -> None:
     assert metadata["items_omitted"] == 3
     assert len(truncated) == 3
     assert truncated == [1, 2, 3]
+
+
+def test_semantic_extractor_depth_bomb() -> None:
+    extractor = SemanticExtractor()
+    payload: dict[str, Any] = {}
+    current = payload
+    for _ in range(15):
+        current["a"] = {}
+        current = current["a"]
+
+    truncated, metadata = extractor.truncate_payload(payload, max_depth=10)
+
+    assert metadata is not None
+    assert metadata["items_omitted"] == 1
+
+    # Traverse truncated payload
+    curr_trunc = truncated
+    depth_reached = 0
+    while isinstance(curr_trunc, dict) and "a" in curr_trunc:
+        curr_trunc = curr_trunc["a"]
+        depth_reached += 1
+
+    assert curr_trunc == "<TRUNCATED_MAX_DEPTH>"
+    assert depth_reached == 10
+
+
+def test_semantic_extractor_node_bomb() -> None:
+    extractor = SemanticExtractor()
+    # Create a payload with 50 nodes
+    payload = [1] * 50
+
+    truncated, metadata = extractor.truncate_payload(payload, max_nodes=20)
+
+    assert metadata is not None
+    assert metadata["items_omitted"] > 0
+    assert len(truncated) == 20
+    assert truncated[-1] == "<TRUNCATED_MAX_NODES>"
+
+
+def test_semantic_extractor_dict_node_bomb() -> None:
+    extractor = SemanticExtractor()
+    # Create a dict payload with 50 elements
+    payload = {f"k{i}": i for i in range(50)}
+
+    truncated, metadata = extractor.truncate_payload(payload, max_nodes=20)
+
+    assert metadata is not None
+    assert metadata["items_omitted"] > 0
+    assert "<TRUNCATED>" in truncated
+    assert truncated["<TRUNCATED>"] == "<TRUNCATED_MAX_NODES>"
 
 
 class MockTensorStorage(TensorStorageProtocol):
