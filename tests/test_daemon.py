@@ -176,6 +176,25 @@ def create_mock_manifest(tool_name: str = "test_tool", is_preemptible: bool = Fa
 
 
 @pytest.mark.asyncio
+async def test_daemon_is_running_property() -> None:
+    broker = MockBroker([])
+    validator = MockValidator(should_fail=False)
+    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    strategy = MockExecutionStrategy()
+    registry = MockRegistry({})
+    daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
+
+    assert not daemon.is_running
+
+    async def dummy_task_func() -> None:
+        pass
+
+    dummy_task = asyncio.create_task(dummy_task_func())
+    daemon.register_task(dummy_task)
+    assert daemon.is_running
+
+
+@pytest.mark.asyncio
 async def test_daemon_successful_dispatch() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
