@@ -246,18 +246,15 @@ class ActuatorDaemon:
                 )
 
             # Successful Execution
-            payload = {"execution_status": "completed", "result": result}
-
-            if intent.event_id in self.preempted_events:
-                payload = {"execution_status": "completed_under_preemption", "null_hash": True}
+            payload = {"result": result} if not isinstance(result, dict) else result
 
             if self.masking_functor:
                 payload = scrub_payload(payload, self.masking_functor)
 
             truncation_metadata = None
-            if isinstance(result, dict) and "truncation_metadata" in result:
+            if isinstance(payload, dict) and "truncation_metadata" in payload:
                 # If the result itself contains truncation_metadata natively
-                truncation_metadata = result.pop("truncation_metadata")
+                truncation_metadata = payload.pop("truncation_metadata")
 
             if self.semantic_extractor:
                 payload, ext_metadata = self.semantic_extractor.truncate_payload(payload)
@@ -306,8 +303,8 @@ class ActuatorDaemon:
                 type="observation",
                 # The FRD: If True, eradicate safely. It doesn't explicitly specify the
                 # Observation payload for eradication, but following conventions,
-                # we return a fatal_crash or preempted status.
-                payload={"execution_status": "preempted", "eradicated": True},
+                # we return a pure state JSON primitive.
+                payload={"eradicated": True},
                 triggering_invocation_id=intent.event_id,
             )
             await self.broker.push(observation.model_dump())
@@ -319,7 +316,7 @@ class ActuatorDaemon:
             if self.masking_functor:
                 tb = self.masking_functor.redact(tb)
 
-            payload = {"execution_status": "fatal_crash", "traceback": tb}
+            payload = {"traceback": tb}
 
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),

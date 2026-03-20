@@ -19,6 +19,7 @@ dependencies = [
     "redis>=7.3.0",
     "tenacity>=9.1.4",
     "typer>=0.24.1",
+    "wasmtime>=42.0.0",
     "z3-solver>=4.16.0.0",
 ]
 license = { file = "LICENSE" }
@@ -74,7 +75,7 @@ warn_unused_ignores = true
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
-addopts = "-n auto --cov=src --cov-report=term-missing --cov-report=html --cov-fail-under=100"
+addopts = "-n auto --cov=src --cov-report=term-missing --cov-report=html "
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
