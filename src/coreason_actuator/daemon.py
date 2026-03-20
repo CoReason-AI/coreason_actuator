@@ -75,6 +75,7 @@ class ActuatorDaemon:
         self.sandbox_cache = sandbox_cache
         self.active_tasks_count = 0
         self._is_running = False
+        self._running_task: asyncio.Task[Any] | None = None
         self.active_tasks: dict[str, asyncio.Task[Any]] = {}
         self.preempted_events: set[str] = set()
         self.active_sandboxes: dict[str, SandboxProviderProtocol] = {}
@@ -83,6 +84,15 @@ class ActuatorDaemon:
     def set_masking_functor(self, masking_functor: MaskingFunctor) -> None:
         """Sets the masking functor to be used for secret scrubbing."""
         self.masking_functor = masking_functor
+
+    @property
+    def is_running(self) -> bool:
+        """Returns True if the daemon has been assigned a running task."""
+        return self._running_task is not None
+
+    def register_task(self, task: asyncio.Task[Any]) -> None:
+        """Registers the main daemon loop task."""
+        self._running_task = task
 
     async def start(self) -> None:
         """Starts the main polling loop of the IPC Daemon."""
