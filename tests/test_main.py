@@ -8,9 +8,13 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
-import pytest
+import asyncio
 
-from coreason_actuator.main import DummyIPCBroker, DummyRegistry, app, run
+import pytest
+from coreason_manifest.spec.ontology import PermissionBoundaryPolicy, SideEffectProfile, ToolManifest
+
+from coreason_actuator.ipc import IPCBrokerServer
+from coreason_actuator.main import ActionSpaceRegistry, AsyncLockManager, app, run
 
 
 def test_app_initialization() -> None:
@@ -24,28 +28,73 @@ def test_app_initialization() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dummy_broker() -> None:
-    broker = DummyIPCBroker()
+async def test_ipc_broker_server() -> None:
+    broker = IPCBrokerServer("tcp://0.0.0.0:5555")
+    await broker.start()
     await broker.queue.put({"test": "data"})
     res = await broker.pull()
     assert res == {"test": "data"}
 
     # Should not raise
     await broker.push({"status": "ok"})
+    await broker.close()
+
+    # When not running, push/pull should raise RuntimeError
+    with pytest.raises(RuntimeError):
+        await broker.pull()
+    with pytest.raises(RuntimeError):
+        await broker.push({})
 
 
-def test_dummy_registry() -> None:
-    reg = DummyRegistry()
+def test_action_space_registry() -> None:
+    reg = ActionSpaceRegistry()
     assert reg.get_tool("anything") is None
 
+    from coreason_manifest.spec.ontology import ActionSpaceManifest
 
-def test_dummy_lock_manager() -> None:
-    from coreason_actuator.main import DummyLockManager
+    mock_tool = ToolManifest.model_construct(
+        tool_name="test_tool",
+        description="test",
+        input_schema={},
+        side_effects=SideEffectProfile.model_construct(is_idempotent=True, mutates_state=False),
+        permissions=PermissionBoundaryPolicy.model_construct(network_access=False, file_system_mutation_forbidden=True),
+    )
+    manifest = ActionSpaceManifest.model_construct(
+        action_space_id="test",
+        native_tools=[mock_tool],
+        mcp_servers=[],
+        ephemeral_partitions=[],
+        kinetic_separation=None,
+    )
+    reg_with_tools = ActionSpaceRegistry(manifest)
+    assert reg_with_tools.get_tool("test_tool") == mock_tool
 
-    lock_manager = DummyLockManager()
-    assert lock_manager.acquire_lock("anything") is True
-    # release_lock does nothing, just check it does not raise
-    lock_manager.release_lock("anything")
+
+@pytest.mark.asyncio
+async def test_async_lock_manager() -> None:
+    lock_manager = AsyncLockManager()
+
+    # Test successful acquire
+    async with lock_manager.acquire("test_lock"):
+        assert "test_lock" in lock_manager._locks
+
+    # Lock is cleaned up
+    assert "test_lock" not in lock_manager._locks
+
+    # Test TTL timeout
+    async def hold_lock() -> None:
+        async with lock_manager.acquire("test_lock2"):
+            await asyncio.sleep(0.1)
+
+    task = asyncio.create_task(hold_lock())
+    # give it a moment to acquire
+    await asyncio.sleep(0.01)
+
+    with pytest.raises(TimeoutError, match="Failed to acquire lock for test_lock2 within TTL 10ms"):
+        async with lock_manager.acquire("test_lock2", ttl=10):
+            pass
+
+    await task
 
 
 @pytest.mark.asyncio
@@ -69,7 +118,7 @@ async def test_run_command_graceful_shutdown() -> None:
             # Verify daemon was initialized
             mock_daemon.assert_called_once()
             # Verify the loop started it
-            mock_loop.run_until_complete.assert_called_once()
+            assert mock_loop.run_until_complete.call_count == 2
 
             # Verify signals were registered
             assert mock_loop.add_signal_handler.call_count == 2
@@ -100,4 +149,4 @@ async def test_run_command_cancelled_error() -> None:
             # Should silently catch asyncio.CancelledError
             run()
 
-            mock_loop.run_until_complete.assert_called_once()
+            assert mock_loop.run_until_complete.call_count >= 1
