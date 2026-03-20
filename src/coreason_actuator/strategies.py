@@ -395,30 +395,49 @@ def _run_sync_execution(tool_name: str, parameters: dict[str, Any]) -> Any:  # p
     """Helper to bridge async registry inside a synchronous ProcessPool"""
     import asyncio  # pragma: no cover
 
-    from coreason_manifest.spec.ontology import ToolInvocationEvent, ToolManifest  # pragma: no cover
+    from coreason_manifest.spec.ontology import (  # pragma: no cover
+        AgentAttestationReceipt,
+        PermissionBoundaryPolicy,
+        SideEffectProfile,
+        ToolInvocationEvent,
+        ToolManifest,
+        ZeroKnowledgeReceipt,
+    )
 
-    from coreason_actuator.main import DummyLockManager, DummyRegistry  # pragma: no cover
+    from coreason_actuator.main import ActionSpaceRegistry, AsyncLockManager  # pragma: no cover
     from coreason_actuator.strategies import NativeExecutionStrategy  # pragma: no cover
 
     # In a real environment, you'd instantiate a fresh registry/engine context here
-    registry = DummyRegistry()  # pragma: no cover
-    lock_manager = DummyLockManager()  # pragma: no cover
-    strategy = NativeExecutionStrategy(registry=registry, lock_manager=lock_manager)  # type: ignore[arg-type]  # pragma: no cover
+    registry = ActionSpaceRegistry()  # pragma: no cover
+    lock_manager = AsyncLockManager()  # pragma: no cover
+    strategy = NativeExecutionStrategy(registry=registry, lock_manager=lock_manager)  # pragma: no cover
 
     intent = ToolInvocationEvent.model_construct(  # pragma: no cover
         event_id="0",
         timestamp=0.0,
         tool_name=tool_name,
         parameters=parameters,  # pragma: no cover
-        zk_proof="mock",  # pragma: no cover
-        agent_attestation="mock",  # pragma: no cover
+        zk_proof=ZeroKnowledgeReceipt.model_construct(  # pragma: no cover
+            proof_protocol="zk-STARK",
+            public_inputs_hash="mock",
+            verifier_key_id="mock",
+            cryptographic_blob="mock",
+        ),  # pragma: no cover
+        agent_attestation=AgentAttestationReceipt.model_construct(  # pragma: no cover
+            training_lineage_hash="mock",
+            developer_signature="mock",
+            capability_merkle_root="mock",
+            credential_presentations=[],
+        ),  # pragma: no cover
     )  # pragma: no cover
     manifest = ToolManifest.model_construct(
         tool_name=tool_name,
         description="Mock",
         input_schema={},
-        side_effects={},
-        permissions={},
+        side_effects=SideEffectProfile.model_construct(is_idempotent=True, mutates_state=False),  # pragma: no cover
+        permissions=PermissionBoundaryPolicy.model_construct(
+            network_access=False, file_system_mutation_forbidden=True
+        ),  # pragma: no cover
     )  # pragma: no cover
 
     # For this patch, we run the async execution in a new isolated event loop

@@ -9,10 +9,16 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import hashlib
+import json
 import re
 from typing import Any
 
-from coreason_manifest.spec.ontology import TamperFaultEvent, ToolInvocationEvent
+from coreason_manifest.spec.ontology import (
+    AgentAttestationReceipt,
+    TamperFaultEvent,
+    ToolInvocationEvent,
+    ZeroKnowledgeReceipt,
+)
 
 from coreason_actuator.interfaces import CryptographicVerifierProtocol
 
@@ -27,22 +33,24 @@ class CryptographicVerifier(CryptographicVerifierProtocol):
         Mathematically verifies the zk_proof and agent_attestation.
         Raises TamperFaultEvent if verification fails or no attestation is present.
         """
-        if not intent.agent_attestation and not intent.zk_proof:
-            raise TamperFaultEvent("No cryptographic attestation provided.")
+        # Explicit zero-trust requirements: strictly verify both exist.
+        if not getattr(intent, "agent_attestation", None) or not isinstance(
+            intent.agent_attestation, AgentAttestationReceipt
+        ):
+            raise TamperFaultEvent("No valid agent_attestation provided.")
 
-        payload_hash = hashlib.sha256(intent.event_id.encode()).hexdigest()
+        if not getattr(intent, "zk_proof", None) or not isinstance(intent.zk_proof, ZeroKnowledgeReceipt):
+            raise TamperFaultEvent("No valid zk_proof provided.")  # pragma: no cover
 
-        if intent.agent_attestation:
-            if intent.agent_attestation.developer_signature != payload_hash:
-                raise TamperFaultEvent("agent_attestation validation failed.")
-            return True
+        payload_hash = hashlib.sha256(json.dumps(intent.parameters, sort_keys=True).encode()).hexdigest()
 
-        if intent.zk_proof:
-            if intent.zk_proof.public_inputs_hash != payload_hash:
-                raise TamperFaultEvent("zk_proof validation failed.")
-            return True
+        if intent.agent_attestation.developer_signature != payload_hash:
+            raise TamperFaultEvent("agent_attestation validation failed.")
 
-        raise TamperFaultEvent("Cryptographic verification failed.")  # pragma: no cover
+        if intent.zk_proof.public_inputs_hash != payload_hash:
+            raise TamperFaultEvent("zk_proof validation failed.")
+
+        return True
 
 
 class MaskingFunctor:

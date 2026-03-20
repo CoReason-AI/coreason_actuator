@@ -9,11 +9,17 @@
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
 import hashlib
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from coreason_manifest.spec.ontology import TamperFaultEvent, ToolInvocationEvent
+from coreason_manifest.spec.ontology import (
+    AgentAttestationReceipt,
+    TamperFaultEvent,
+    ToolInvocationEvent,
+    ZeroKnowledgeReceipt,
+)
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -26,16 +32,33 @@ def test_cryptographic_verifier_no_attestation() -> None:
     intent.agent_attestation = None
     intent.zk_proof = None
 
-    with pytest.raises(TamperFaultEvent, match=r"No cryptographic attestation provided\."):
+    with pytest.raises(TamperFaultEvent, match=r"No valid agent_attestation provided\."):
         verifier.verify(intent)
 
 
 def test_cryptographic_verifier_invalid_agent_attestation() -> None:
     verifier = CryptographicVerifier()
-    intent = MagicMock(spec=ToolInvocationEvent)
-    intent.event_id = "test_event"
-    intent.agent_attestation = MagicMock()
-    intent.agent_attestation.developer_signature = "invalid_hash"
+
+    expected_hash = hashlib.sha256(json.dumps({"param": "value"}, sort_keys=True).encode()).hexdigest()
+
+    intent = ToolInvocationEvent.model_construct(
+        event_id="test_event",
+        timestamp=0.0,
+        tool_name="test",
+        parameters={"param": "value"},
+        agent_attestation=AgentAttestationReceipt.model_construct(
+            training_lineage_hash="mock",
+            developer_signature="invalid_hash",
+            capability_merkle_root="mock",
+            credential_presentations=[],
+        ),
+        zk_proof=ZeroKnowledgeReceipt.model_construct(
+            proof_protocol="zk-STARK",
+            public_inputs_hash=expected_hash,
+            verifier_key_id="mock",
+            cryptographic_blob="mock",
+        ),
+    )
 
     with pytest.raises(TamperFaultEvent, match=r"agent_attestation validation failed\."):
         verifier.verify(intent)
@@ -43,21 +66,54 @@ def test_cryptographic_verifier_invalid_agent_attestation() -> None:
 
 def test_cryptographic_verifier_valid_agent_attestation() -> None:
     verifier = CryptographicVerifier()
-    intent = MagicMock(spec=ToolInvocationEvent)
-    intent.event_id = "test_event"
-    intent.agent_attestation = MagicMock()
-    intent.agent_attestation.developer_signature = hashlib.sha256(b"test_event").hexdigest()
+
+    expected_hash = hashlib.sha256(json.dumps({"param": "value"}, sort_keys=True).encode()).hexdigest()
+
+    intent = ToolInvocationEvent.model_construct(
+        event_id="test_event",
+        timestamp=0.0,
+        tool_name="test",
+        parameters={"param": "value"},
+        agent_attestation=AgentAttestationReceipt.model_construct(
+            training_lineage_hash="mock",
+            developer_signature=expected_hash,
+            capability_merkle_root="mock",
+            credential_presentations=[],
+        ),
+        zk_proof=ZeroKnowledgeReceipt.model_construct(
+            proof_protocol="zk-STARK",
+            public_inputs_hash=expected_hash,
+            verifier_key_id="mock",
+            cryptographic_blob="mock",
+        ),
+    )
 
     assert verifier.verify(intent) is True
 
 
 def test_cryptographic_verifier_invalid_zk_proof() -> None:
     verifier = CryptographicVerifier()
-    intent = MagicMock(spec=ToolInvocationEvent)
-    intent.event_id = "test_event"
-    intent.agent_attestation = None
-    intent.zk_proof = MagicMock()
-    intent.zk_proof.public_inputs_hash = "invalid_hash"
+
+    expected_hash = hashlib.sha256(json.dumps({"param": "value"}, sort_keys=True).encode()).hexdigest()
+
+    intent = ToolInvocationEvent.model_construct(
+        event_id="test_event",
+        timestamp=0.0,
+        tool_name="test",
+        parameters={"param": "value"},
+        agent_attestation=AgentAttestationReceipt.model_construct(
+            training_lineage_hash="mock",
+            developer_signature=expected_hash,
+            capability_merkle_root="mock",
+            credential_presentations=[],
+        ),
+        zk_proof=ZeroKnowledgeReceipt.model_construct(
+            proof_protocol="zk-STARK",
+            public_inputs_hash="invalid_hash",
+            verifier_key_id="mock",
+            cryptographic_blob="mock",
+        ),
+    )
 
     with pytest.raises(TamperFaultEvent, match=r"zk_proof validation failed\."):
         verifier.verify(intent)
@@ -65,11 +121,27 @@ def test_cryptographic_verifier_invalid_zk_proof() -> None:
 
 def test_cryptographic_verifier_valid_zk_proof() -> None:
     verifier = CryptographicVerifier()
-    intent = MagicMock(spec=ToolInvocationEvent)
-    intent.event_id = "test_event"
-    intent.agent_attestation = None
-    intent.zk_proof = MagicMock()
-    intent.zk_proof.public_inputs_hash = hashlib.sha256(b"test_event").hexdigest()
+
+    expected_hash = hashlib.sha256(json.dumps({"param": "value"}, sort_keys=True).encode()).hexdigest()
+
+    intent = ToolInvocationEvent.model_construct(
+        event_id="test_event",
+        timestamp=0.0,
+        tool_name="test",
+        parameters={"param": "value"},
+        agent_attestation=AgentAttestationReceipt.model_construct(
+            training_lineage_hash="mock",
+            developer_signature=expected_hash,
+            capability_merkle_root="mock",
+            credential_presentations=[],
+        ),
+        zk_proof=ZeroKnowledgeReceipt.model_construct(
+            proof_protocol="zk-STARK",
+            public_inputs_hash=expected_hash,
+            verifier_key_id="mock",
+            cryptographic_blob="mock",
+        ),
+    )
 
     assert verifier.verify(intent) is True
 
