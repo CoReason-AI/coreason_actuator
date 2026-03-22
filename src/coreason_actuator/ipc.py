@@ -14,6 +14,15 @@ import json
 from typing import Any
 from urllib.parse import urlparse
 
+from coreason_manifest.spec.ontology import (
+    EphemeralNamespacePartitionState,
+    EvictionPolicy,
+    LatentSchemaInferenceIntent,
+    ToolInvocationEvent,
+    ToolManifest,
+)
+from urllib.parse import urlparse
+
 from coreason_actuator.interfaces import IPCBrokerProtocol
 from coreason_actuator.utils.logger import logger
 
@@ -105,3 +114,103 @@ class IPCBrokerServer(IPCBrokerProtocol):
             except Exception as e:  # pragma: no cover
                 logger.error(f"Failed to push message to client: {e}")  # pragma: no cover
         logger.info(f"IPCBrokerServer pushed to {len(self._clients)} clients")
+
+class RemoteKineticBrokerClient:
+    """
+    A network client acting as the ActuatorEngineProtocol.
+    Connects to the IPCBrokerServer to proxy execution payloads to a remote physical daemon.
+    """
+
+    def __init__(self, broker_uri: str | None) -> None:
+        self.broker_uri = broker_uri or "tcp://127.0.0.1:5555"
+
+    async def execute(
+        self,
+        intent: ToolInvocationEvent,
+        manifest: ToolManifest,
+        eviction_policy: EvictionPolicy | None = None,
+        partitions: list[EphemeralNamespacePartitionState] | None = None,
+    ) -> dict[str, Any]:
+        """Proxies the payload over TCP and strictly awaits the JSON-RPC response."""
+        parsed = urlparse(self.broker_uri)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 5555
+
+        reader, writer = await asyncio.open_connection(host, port)
+        try:
+            payload = intent.model_dump()
+            payload["manifest"] = manifest.model_dump()
+            if eviction_policy is not None:
+                payload["eviction_policy"] = eviction_policy.model_dump()
+
+            if partitions is not None:
+                payload["partitions"] = [p.model_dump() for p in partitions]
+
+            if hasattr(intent, "state_hydration") and intent.state_hydration is not None:
+                payload["state_hydration"] = getattr(intent, "state_hydration").model_dump()
+
+            packet = {
+                "jsonrpc": "2.0",
+                "id": intent.event_id,
+                "method": intent.tool_name,
+                "params": payload,
+            }
+
+            data = json.dumps(packet) + "\n"
+            writer.write(data.encode())
+            await writer.drain()
+
+            while True:
+                response_data = await reader.readline()
+                if not response_data:
+                    raise ConnectionError("Remote IPC Broker closed the connection unexpectedly.")
+
+                response = json.loads(response_data.decode())
+                if response.get("triggering_invocation_id") == intent.event_id or response.get("id") == intent.event_id:
+                    return response
+        finally:
+            writer.close()
+            import contextlib
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
+
+    async def execute_research_intent(
+        self, intent: LatentSchemaInferenceIntent, partitions: list[EphemeralNamespacePartitionState] | None = None
+    ) -> dict[str, Any]:
+        """Proxies a high-order research intent over TCP."""
+        parsed = urlparse(self.broker_uri)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 5555
+
+        reader, writer = await asyncio.open_connection(host, port)
+        try:
+            payload = intent.model_dump()
+            if partitions is not None:
+                payload["partitions"] = [p.model_dump() for p in partitions]
+
+            intent_id = getattr(intent, "event_id", getattr(intent, "target_buffer_id", "unknown"))
+            packet = {
+                "jsonrpc": "2.0",
+                "id": intent_id,
+                "method": "__LATENT_RESEARCH__",
+                "params": payload,
+            }
+
+            data = json.dumps(packet) + "\n"
+            writer.write(data.encode())
+            await writer.drain()
+
+            while True:
+                response_data = await reader.readline()
+                if not response_data:
+                    raise ConnectionError("Remote IPC Broker closed the connection unexpectedly.")
+
+                response = json.loads(response_data.decode())
+                if response.get("triggering_invocation_id") == intent_id or response.get("id") == intent_id:
+                    return response
+        finally:
+            writer.close()
+            import contextlib
+            with contextlib.suppress(ConnectionError):
+                await writer.wait_closed()
+
