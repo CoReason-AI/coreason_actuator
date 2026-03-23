@@ -113,6 +113,7 @@ def test_validator_missing_state_hydration() -> None:
 
     assert isinstance(result, JSONRPCErrorResponseState)
     assert result.error.code == -32602
+    assert "strictly required state_hydration" in result.error.message
 
 
 def test_validator_missing_tool_name_attribute() -> None:

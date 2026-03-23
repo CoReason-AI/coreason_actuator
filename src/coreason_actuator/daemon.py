@@ -229,8 +229,8 @@ class ActuatorDaemon:
 
                 if sandbox and partition_state:
                     # Apply Dual-Evaluation Permission Boundary and immutability checks
-                    verify_network_access(manifest, partition_state, sandbox)
-                    enforce_sandbox_immutability(manifest, sandbox)
+                    verify_network_access(manifest, partition_state, sandbox)  # type: ignore[arg-type]
+                    enforce_sandbox_immutability(manifest, sandbox)  # type: ignore[arg-type]
 
                 # Based on FR-2.3, if allowed_vault_keys is present, unseal secrets and inject into sandbox
                 if session_state and getattr(session_state, "allowed_vault_keys", None) and self.vault:
@@ -242,7 +242,7 @@ class ActuatorDaemon:
             sandbox_pid = sandbox
 
             if not manifest.get("is_preemptible", True) if isinstance(manifest, dict) else manifest.is_preemptible:
-                inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))
+                inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))  # type: ignore[arg-type]
                 try:
                     result = await asyncio.shield(inner_task)
                 except asyncio.CancelledError:
@@ -256,7 +256,7 @@ class ActuatorDaemon:
                     self.preempted_events.add(intent.event_id)
             else:
                 # Preemptible
-                result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)
+                result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)  # type: ignore[arg-type]
 
             # ZK Proof extraction
             zk_receipt = None
@@ -395,7 +395,7 @@ class ActuatorDaemon:
             if sandbox:
                 bytecode = intent.target_buffer_id.encode("utf-8")
                 if getattr(intent, "formal_grammar_payload", None):
-                    bytecode = intent.formal_grammar_payload.encode("utf-8")
+                    bytecode = intent.formal_grammar_payload.encode("utf-8")  # type: ignore[attr-defined]
                 result = await sandbox.execute(bytecode)
 
             import time
