@@ -87,7 +87,12 @@ async def test_engine_zk_receipt() -> None:
     engine = ActuatorEngine(broker=broker, daemon=daemon)
 
     # Setup mock push/pull
-    from coreason_manifest.spec.ontology import AgentAttestationReceipt, ZeroKnowledgeReceipt
+    from coreason_manifest.spec.ontology import (
+        AgentAttestationReceipt,
+        PermissionBoundaryPolicy,
+        SideEffectProfile,
+        ZeroKnowledgeReceipt,
+    )
 
     intent = ToolInvocationEvent(
         event_id="test-zk-event",
@@ -132,8 +137,14 @@ async def test_engine_zk_receipt() -> None:
         tool_name="test_tool",
         description="mock",
         input_schema={},
-        side_effects=cast("Any", {}),
-        permissions=cast("Any", {}),
+        side_effects=SideEffectProfile.model_construct(
+            mutates_state=False,
+            is_idempotent=True,
+        ),
+        permissions=PermissionBoundaryPolicy.model_construct(
+            network_access=False,
+            file_system_mutation_forbidden=True,
+        ),
     )
 
     observation = ObservationEvent.model_construct(
