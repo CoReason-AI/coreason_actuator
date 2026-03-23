@@ -12,7 +12,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from coreason_manifest.spec.ontology import BackpressurePolicy, ToolInvocationEvent, ToolManifest
+from coreason_manifest.spec.ontology import ToolInvocationEvent, ToolManifest
 
 from coreason_actuator.daemon import ActuatorDaemon
 from coreason_actuator.sandbox import SandboxProviderProtocol, StatefulSandboxCache
@@ -179,7 +179,7 @@ def create_mock_manifest(tool_name: str = "test_tool", is_preemptible: bool = Fa
 async def test_daemon_is_running_property() -> None:
     broker = MockBroker([])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy()
     registry = MockRegistry({})
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
@@ -198,7 +198,7 @@ async def test_daemon_is_running_property() -> None:
 async def test_daemon_successful_dispatch() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy()
     registry = MockRegistry({"test_tool": create_mock_manifest()})
 
@@ -223,7 +223,7 @@ async def test_daemon_backpressure_shedding() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
     # Set max concurrent to 1, but seed active tasks to 1 to force shedding
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=1)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 1}
     strategy = MockExecutionStrategy()
     registry = MockRegistry()
 
@@ -241,7 +241,7 @@ async def test_daemon_backpressure_shedding() -> None:
 async def test_daemon_validation_failure() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=True)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy()
     registry = MockRegistry()
 
@@ -258,7 +258,7 @@ async def test_daemon_validation_failure() -> None:
 async def test_daemon_start_stop() -> None:
     broker = MockBroker([])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy()
     registry = MockRegistry()
 
@@ -283,7 +283,7 @@ async def test_daemon_start_stop() -> None:
 async def test_daemon_execution_success() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(result={"some": "data"})
     registry = MockRegistry({"test_tool": create_mock_manifest()})
 
@@ -308,7 +308,7 @@ async def test_daemon_execution_success() -> None:
 async def test_daemon_execution_crash() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(should_crash=True)
     registry = MockRegistry({"test_tool": create_mock_manifest()})
 
@@ -333,7 +333,7 @@ async def test_daemon_execution_crash() -> None:
 async def test_daemon_missing_manifest() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy()
     # Missing from registry
     registry = MockRegistry({})
@@ -363,7 +363,7 @@ async def test_daemon_preemption_preemptible_task() -> None:
         ]
     )
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(result={"payload": {"eradicated": True}})
     # Create manifest with is_preemptible=True
     registry = MockRegistry({"test_tool": create_mock_manifest(is_preemptible=True)})
@@ -405,7 +405,7 @@ async def test_daemon_preemption_sandbox_teardown() -> None:
         ]
     )
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(result={"some": "data"})
     # Create manifest with is_preemptible=True
     registry = MockRegistry({"test_tool": create_mock_manifest(is_preemptible=True)})
@@ -456,7 +456,7 @@ async def test_daemon_preemption_no_active_task() -> None:
         ]
     )
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(result={"some": "data"})
     registry = MockRegistry({})
 
@@ -476,7 +476,7 @@ async def test_daemon_preemption_non_preemptible_task() -> None:
         ]
     )
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(result={"some": "data"})
     # Create manifest with is_preemptible=False
     registry = MockRegistry({"test_tool": create_mock_manifest(is_preemptible=False)})
@@ -513,7 +513,7 @@ async def test_daemon_preemption_non_preemptible_task() -> None:
 async def test_daemon_execution_success_with_scrubbing() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
 
     # Execution strategy returns data with a secret
     strategy = MockExecutionStrategy(
@@ -558,7 +558,7 @@ async def test_daemon_execution_success_with_scrubbing() -> None:
 async def test_daemon_execution_crash_with_scrubbing() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
 
     class CrasherStrategy:
         async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
@@ -593,7 +593,7 @@ async def test_daemon_execution_crash_with_scrubbing() -> None:
 async def test_daemon_vault_unsealing_and_injection() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(result={"some": "data"})
     registry = MockRegistry({"test_tool": create_mock_manifest()})
     vault = MockVault({"oauth2:github": "secret_token"})
@@ -644,7 +644,7 @@ async def test_daemon_vault_unsealing_and_injection() -> None:
 async def test_daemon_semantic_truncation_routing() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
 
     # Simulate native SemanticExtractor behavior via execution strategy
     truncated_result = {
@@ -685,7 +685,7 @@ async def test_daemon_semantic_truncation_routing() -> None:
 async def test_daemon_semantic_extractor_integration() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
 
     # Execution strategy returns data with a very large array
     large_array = list(range(100))
@@ -727,7 +727,7 @@ async def test_daemon_semantic_extractor_integration() -> None:
 async def test_daemon_semantic_extractor_native_combination() -> None:
     broker = MockBroker([{"jsonrpc": "2.0", "method": "test", "id": 1}])
     validator = MockValidator(should_fail=False)
-    policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
+    policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
 
     # Strategy returns some truncation natively
     truncated_result = {
