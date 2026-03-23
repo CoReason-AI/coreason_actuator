@@ -11,14 +11,11 @@
 import asyncio
 from typing import Any
 
-from coreason_manifest.spec.ontology import (
-    EphemeralNamespacePartitionState,
-    EvictionPolicy,
-    LatentSchemaInferenceIntent,
-    ToolInvocationEvent,
-    ToolManifest,
+from coreason_actuator.adapters.dto import (
+    LocalEvictionPolicy,
+    LocalToolInvocation,
+    LocalToolManifest,
 )
-
 from coreason_actuator.daemon import ActuatorDaemon
 from coreason_actuator.interfaces import IPCBrokerProtocol
 from coreason_actuator.utils.logger import logger
@@ -49,10 +46,10 @@ class ActuatorEngine:
 
     async def execute(
         self,
-        intent: ToolInvocationEvent,
-        manifest: ToolManifest,
-        eviction_policy: EvictionPolicy | None = None,
-        partitions: list[EphemeralNamespacePartitionState] | None = None,
+        intent: dict[str, Any],
+        manifest: dict[str, Any],
+        eviction_policy: dict[str, Any] | None = None,
+        partitions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """
         Awaits an authorized tool execution and returns a raw, verifiable JSON result.
@@ -62,30 +59,37 @@ class ActuatorEngine:
         """
         await self._start_daemon_if_needed()
 
-        # Serialize the intent into a raw payload for the IPC Broker
-        payload = intent.model_dump()
+        local_manifest = LocalToolManifest.model_validate(manifest)
+        local_eviction = LocalEvictionPolicy.model_validate(eviction_policy) if eviction_policy else None
 
-        # Pass manifest and eviction policy in the payload so the worker can enforce constraints
-        payload["manifest"] = manifest.model_dump()
-        if eviction_policy is not None:
-            payload["eviction_policy"] = eviction_policy.model_dump()
+        intent_payload = intent.copy()
+        intent_payload["manifest"] = local_manifest.model_dump()
+        if local_eviction:
+            intent_payload["eviction_policy"] = local_eviction.model_dump()
+
+        local_intent = LocalToolInvocation.from_payload(intent_payload)
+
+        # Serialize the intent into a raw payload for the IPC Broker, stripping unknown fields
+        payload = local_intent.model_dump()
 
         if partitions is not None:
-            payload["partitions"] = [p.model_dump() for p in partitions]
+            payload["partitions"] = partitions
 
         # Hydrate the dynamic state manifest into the payload out-of-band
-        if hasattr(intent, "state_hydration") and intent.state_hydration is not None:
-            payload["state_hydration"] = intent.state_hydration.model_dump()
+        if "state_hydration" in intent and intent["state_hydration"] is not None:
+            payload["state_hydration"] = intent["state_hydration"]
+
+        event_id = intent.get("event_id")
 
         # Construct JSON-RPC 2.0 packet
         packet = {
             "jsonrpc": "2.0",
-            "id": intent.event_id,
-            "method": intent.tool_name,
+            "id": event_id,
+            "method": local_intent.tool_name,
             "params": payload,
         }
 
-        logger.info(f"Engine dispatching intent {intent.event_id} to broker.")
+        logger.info(f"Engine dispatching intent {event_id} to broker.")
         await self.broker.push(packet)
 
         # Poll the broker for the corresponding observation
@@ -93,13 +97,13 @@ class ActuatorEngine:
             response = await self.broker.pull()
 
             # Check if it's the target ObservationEvent
-            if response.get("triggering_invocation_id") == intent.event_id:
-                logger.info(f"Engine received ObservationEvent for intent {intent.event_id}.")
+            if response.get("triggering_invocation_id") == event_id:
+                logger.info(f"Engine received ObservationEvent for intent {event_id}.")
                 return response
 
             # Check if it's a JSONRPCErrorResponseState indicating failure or rejection
-            if response.get("id") == intent.event_id and "error" in response:
-                logger.error(f"Engine received JSONRPCErrorResponseState for intent {intent.event_id}.")
+            if response.get("id") == event_id and "error" in response:
+                logger.error(f"Engine received JSONRPCErrorResponseState for intent {event_id}.")
                 return response
 
             # If the payload belongs to another event, yield and ideally put it back
@@ -108,20 +112,20 @@ class ActuatorEngine:
             await asyncio.sleep(0.01)
 
     async def execute_research_intent(
-        self, intent: LatentSchemaInferenceIntent, partitions: list[EphemeralNamespacePartitionState] | None = None
+        self, intent: dict[str, Any], partitions: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
         """
         Dispatches a high-order LatentSchemaInferenceIntent (Phase 4) across the IPC boundary.
         """
         await self._start_daemon_if_needed()
 
-        payload = intent.model_dump()
+        payload = intent.copy()
         if partitions is not None:
-            payload["partitions"] = [p.model_dump() for p in partitions]
+            payload["partitions"] = partitions
 
         packet = {
             "jsonrpc": "2.0",
-            "id": getattr(intent, "event_id", getattr(intent, "target_buffer_id", "unknown")),
+            "id": intent.get("event_id", intent.get("target_buffer_id", "unknown")),
             "method": "__LATENT_RESEARCH__",
             "params": payload,
         }

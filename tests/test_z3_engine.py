@@ -169,7 +169,10 @@ async def test_engine_zk_receipt() -> None:
     # Mock engine method directly
     cast("AsyncMock", engine.broker.pull).return_value = obs_dict
 
-    response = await engine.execute(intent, manifest)
+    intent_dict = intent.model_dump()
+    intent_dict["state_hydration"] = hydration.model_dump()
+
+    response = await engine.execute(intent_dict, manifest.model_dump())
 
     assert "zk_proof" in response
     assert response["zk_proof"]["cryptographic_blob"] == {"stdout": "blob"}
