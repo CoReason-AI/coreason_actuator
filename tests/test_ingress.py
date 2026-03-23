@@ -126,13 +126,13 @@ def test_validator_missing_tool_name_attribute() -> None:
     # without failing validation is to patch the constructed object.
     import unittest.mock
 
-    with unittest.mock.patch("coreason_manifest.spec.ontology.ToolInvocationEvent.model_construct") as mock_construct:
+    with unittest.mock.patch("coreason_manifest.spec.ontology.ToolInvocationEvent.model_validate") as mock_validate:
         # Mock it so it returns an object without a `tool_name` attribute
         class BadToolInvocationEvent:
             def model_dump(self) -> dict[str, Any]:
                 return {}
 
-        mock_construct.return_value = BadToolInvocationEvent()
+        mock_validate.return_value = BadToolInvocationEvent()
         result = validator.validate_intent(payload)
 
         assert isinstance(result, JSONRPCErrorResponseState)

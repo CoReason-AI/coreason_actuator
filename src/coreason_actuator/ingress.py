@@ -87,7 +87,7 @@ class IPCValidator:
             )
 
         try:
-            tool_invocation = ToolInvocationEvent.model_construct(**params)
+            tool_invocation = ToolInvocationEvent.model_validate(params)
         except (ValidationError, TypeError, ValueError) as e:
             err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
             return JSONRPCErrorResponseState.model_construct(
