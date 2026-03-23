@@ -10,21 +10,25 @@
 
 from typing import Any, Protocol
 
-from coreason_manifest.spec.ontology import EvictionPolicy, ToolInvocationEvent, ToolManifest
-
 
 class ActuatorEngineProtocol(Protocol):
-    """Protocol defining the interface for the primary execution engine class."""
+    """Protocol defining the interface for the primary execution engine class.
+
+    This protocol expects serialized payloads (dicts) rather than live memory objects.
+    """
 
     async def execute(
-        self, intent: ToolInvocationEvent, manifest: ToolManifest, eviction_policy: EvictionPolicy | None = None
+        self, intent: dict[str, Any], manifest: dict[str, Any], eviction_policy: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Awaits an authorized tool execution and returns a raw, verifiable JSON result."""
         ...
 
 
 class IPCBrokerProtocol(Protocol):
-    """Protocol defining the interface for IPC message brokers."""
+    """Protocol defining the interface for IPC message brokers.
+
+    This protocol expects serialized payloads (dicts) rather than live memory objects.
+    """
 
     async def pull(self) -> dict[str, Any]:
         """Pulls a raw JSON-RPC envelope from the broker queue."""
@@ -36,17 +40,23 @@ class IPCBrokerProtocol(Protocol):
 
 
 class ActionSpaceRegistryProtocol(Protocol):
-    """Protocol defining the interface for the mounted ActionSpaceManifest."""
+    """Protocol defining the interface for the mounted ActionSpaceManifest.
 
-    def get_tool(self, tool_name: str) -> ToolManifest | None:
+    This protocol expects serialized payloads (dicts) rather than live memory objects.
+    """
+
+    def get_tool(self, tool_name: str) -> dict[str, Any] | None:
         """Retrieves a tool from the registry if it exists."""
         ...
 
 
 class CryptographicVerifierProtocol(Protocol):
-    """Protocol defining the interface for cryptographic intent authorization."""
+    """Protocol defining the interface for cryptographic intent authorization.
 
-    def verify(self, intent: ToolInvocationEvent) -> bool:
+    This protocol expects serialized payloads (dicts) rather than live memory objects.
+    """
+
+    def verify(self, intent: dict[str, Any]) -> bool:
         """Mathematically verifies the zk_proof and agent_attestation."""
         ...
 
