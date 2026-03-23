@@ -364,7 +364,7 @@ async def test_daemon_preemption_preemptible_task() -> None:
     )
     validator = MockValidator(should_fail=False)
     policy = BackpressurePolicy(max_queue_depth=10, max_concurrent_tool_invocations=10)
-    strategy = MockExecutionStrategy(result={"some": "data"})
+    strategy = MockExecutionStrategy(result={"payload": {"eradicated": True}})
     # Create manifest with is_preemptible=True
     registry = MockRegistry({"test_tool": create_mock_manifest(is_preemptible=True)})
 
@@ -393,7 +393,7 @@ async def test_daemon_preemption_preemptible_task() -> None:
     pushed = broker.pushed[0]
     assert pushed["type"] == "observation"
 
-    assert pushed["payload"]["eradicated"] is True
+    assert pushed["payload"].get("payload", {}).get("eradicated") is True
 
 
 @pytest.mark.asyncio

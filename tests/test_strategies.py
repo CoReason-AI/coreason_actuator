@@ -287,11 +287,10 @@ async def test_native_execution_strategy_ast_safety_failure() -> None:
     manifest = create_mock_manifest()
 
     result = await strategy.execute(intent, manifest, sandbox_pid=None)
-    assert result.payload["execution_status"] == "fatal_crash"
-    assert (
-        "Kinetic execution bleed detected" in result.payload["traceback"]
-        or "AST safety verification failed" in result.payload["traceback"]
-    )
+    assert result.get("execution_status") == "fatal_crash"
+    assert "Kinetic execution bleed detected" in result.get(
+        "traceback"
+    ) or "AST safety verification failed" in result.get("traceback")
 
 
 @pytest.mark.asyncio
@@ -314,8 +313,8 @@ async def test_native_execution_strategy_ast_safety_explicit_false() -> None:
     with pytest.MonkeyPatch.context() as m:
         m.setattr("coreason_actuator.strategies.verify_ast_safety", MagicMock(return_value=False))
         result = await strategy.execute(intent, manifest, sandbox_pid=None)
-        assert result.payload["execution_status"] == "fatal_crash"
-        assert "AST safety verification failed for parameter 'code'" in result.payload["traceback"]
+        assert result.get("execution_status") == "fatal_crash"
+        assert "AST safety verification failed for parameter 'code'" in result.get("traceback")
 
 
 @pytest.mark.asyncio
@@ -338,8 +337,8 @@ async def test_native_execution_strategy_ast_safety_unknown_error() -> None:
     with pytest.MonkeyPatch.context() as m:
         m.setattr("coreason_actuator.strategies.verify_ast_safety", MagicMock(side_effect=Exception("Unknown Error")))
         result = await strategy.execute(intent, manifest, sandbox_pid=None)
-        assert result.payload["execution_status"] == "fatal_crash"
-        assert "Unknown Error" in result.payload["traceback"]
+        assert result.get("execution_status") == "fatal_crash"
+        assert "Unknown Error" in result.get("traceback")
 
 
 @pytest.mark.asyncio
@@ -781,7 +780,7 @@ async def test_mcp_client_strategy_stdio_spawn_invalid_json() -> None:
 async def test_mcp_client_strategy_non_stdio() -> None:
     server_manifest = MCPServerManifest(
         server_id="mock_id",
-        transport=HTTPTransportProfile(uri="http://mock.com"),
+        transport=HTTPTransportProfile(uri="http://mock.com"),  # type: ignore[arg-type]
         binary_hash="a" * 64,
         capability_whitelist=MCPCapabilityWhitelistPolicy(
             allowed_tools=["test_tool_http"], allowed_prompts=[], allowed_resources=[]

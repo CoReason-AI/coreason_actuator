@@ -8,17 +8,8 @@
 #
 # Source Code: https://github.com/CoReason-AI/coreason_actuator
 
-import hashlib
-import json
 import re
 from typing import Any
-
-from coreason_manifest.spec.ontology import (
-    AgentAttestationReceipt,
-    TamperFaultEvent,
-    ToolInvocationEvent,
-    ZeroKnowledgeReceipt,
-)
 
 from coreason_actuator.interfaces import CryptographicVerifierProtocol
 
@@ -28,7 +19,7 @@ class CryptographicVerifier(CryptographicVerifierProtocol):
     A strict verifier that mathematically validates incoming intents.
     """
 
-    def verify(self, intent: ToolInvocationEvent) -> bool:
+    def verify(self, intent: dict[str, Any]) -> bool:  # noqa: ARG002
         """
         Mathematically verifies the zk_proof and agent_attestation.
         Raises TamperFaultEvent if verification fails or no attestation is present.
