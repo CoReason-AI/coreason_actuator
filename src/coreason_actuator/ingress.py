@@ -46,9 +46,7 @@ class IPCValidator:
         try:
             intent = BoundedJSONRPCIntent.model_validate(raw_payload)
         except (ValidationError, TypeError) as e:
-            err_details = (
-                e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
-            )
+            err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
             return JSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=raw_payload.get("id"),
@@ -77,9 +75,7 @@ class IPCValidator:
         try:
             state_hydration_manifest = StateHydrationManifest.model_construct(**state_hydration_dict)
         except (ValidationError, TypeError) as e:
-            err_details = (
-                e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
-            )
+            err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
             return JSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,
@@ -93,9 +89,7 @@ class IPCValidator:
         try:
             tool_invocation = ToolInvocationEvent.model_construct(**params)
         except (ValidationError, TypeError, ValueError) as e:
-            err_details = (
-                e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
-            )
+            err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
             return JSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,

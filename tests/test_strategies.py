@@ -781,7 +781,7 @@ async def test_mcp_client_strategy_stdio_spawn_invalid_json() -> None:
 async def test_mcp_client_strategy_non_stdio() -> None:
     server_manifest = MCPServerManifest(
         server_id="mock_id",
-        transport=HTTPTransportProfile(uri="http://mock.com"),
+        transport=HTTPTransportProfile(uri="http://mock.com"),  # type: ignore[arg-type]
         binary_hash="a" * 64,
         capability_whitelist=MCPCapabilityWhitelistPolicy(
             allowed_tools=["test_tool_http"], allowed_prompts=[], allowed_resources=[]

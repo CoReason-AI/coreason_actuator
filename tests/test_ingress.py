@@ -26,15 +26,16 @@ class MockRegistry:
     def __init__(self, tools: dict[str, ToolManifest]) -> None:
         self.tools = tools
 
-    def get_tool(self, tool_name: str) -> ToolManifest | None:
-        return self.tools.get(tool_name)
+    def get_tool(self, tool_name: str) -> dict[str, Any] | None:
+        tool = self.tools.get(tool_name)
+        return tool.model_dump() if tool else None
 
 
 class MockVerifier:
     def __init__(self, should_pass: bool = True) -> None:
         self.should_pass = should_pass
 
-    def verify(self, intent: ToolInvocationEvent) -> bool:
+    def verify(self, intent: dict[str, Any]) -> bool:
         _ = intent
         if not self.should_pass:
             raise TamperFaultEvent("Mock verification failed")
