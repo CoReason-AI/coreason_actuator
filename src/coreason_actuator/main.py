@@ -41,12 +41,19 @@ class ActionSpaceRegistry(ActionSpaceRegistryProtocol):
                 name = getattr(tool, "tool_name", getattr(tool, "name", "unknown"))
                 self.tools[name] = tool
 
-    def get_tool(self, tool_name: str) -> ToolManifest | None:
+    def get_tool(self, tool_name: str) -> dict[str, Any] | None:
         """Retrieves a tool from the registry if it exists."""
         if tool_name in self.tools:
-            return self.tools.get(tool_name)
+            tool = self.tools.get(tool_name)
+            return tool.model_dump() if tool else None
         if tool_name in self._callables:
-            return ToolManifest.model_construct(tool_name=tool_name)
+            return {
+                "tool_name": tool_name,
+                "description": "Dynamic tool",
+                "input_schema": {"type": "object", "properties": {}},
+                "side_effects": [],
+                "permissions": [],
+            }
         return None
 
     async def get_callable(self, tool_name: str) -> Callable[..., Awaitable[Any]] | None:
@@ -85,7 +92,7 @@ class AsyncLockManager(DistributedLockProtocol):
                 self._locks.pop(lock_key, None)
 
 
-@app.command()  # type: ignore[misc]
+@app.command()
 def run() -> None:
     """Bootstraps the ActuatorDaemon and starts the main loop."""
     logger.info("Bootstrapping ActuatorDaemon...")

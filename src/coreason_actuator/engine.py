@@ -69,7 +69,7 @@ class ActuatorEngine:
         payload["manifest"] = manifest.model_dump()
         if eviction_policy is not None:
             payload["eviction_policy"] = eviction_policy.model_dump()
-            
+
         if partitions is not None:
             payload["partitions"] = [p.model_dump() for p in partitions]
 

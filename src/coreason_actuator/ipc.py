@@ -21,7 +21,6 @@ from coreason_manifest.spec.ontology import (
     ToolInvocationEvent,
     ToolManifest,
 )
-from urllib.parse import urlparse
 
 from coreason_actuator.interfaces import IPCBrokerProtocol
 from coreason_actuator.utils.logger import logger
@@ -115,6 +114,7 @@ class IPCBrokerServer(IPCBrokerProtocol):
                 logger.error(f"Failed to push message to client: {e}")  # pragma: no cover
         logger.info(f"IPCBrokerServer pushed to {len(self._clients)} clients")
 
+
 class RemoteKineticBrokerClient:
     """
     A network client acting as the ActuatorEngineProtocol.
@@ -147,7 +147,7 @@ class RemoteKineticBrokerClient:
                 payload["partitions"] = [p.model_dump() for p in partitions]
 
             if hasattr(intent, "state_hydration") and intent.state_hydration is not None:
-                payload["state_hydration"] = getattr(intent, "state_hydration").model_dump()
+                payload["state_hydration"] = intent.state_hydration.model_dump()
 
             packet = {
                 "jsonrpc": "2.0",
@@ -167,10 +167,11 @@ class RemoteKineticBrokerClient:
 
                 response = json.loads(response_data.decode())
                 if response.get("triggering_invocation_id") == intent.event_id or response.get("id") == intent.event_id:
-                    return response
+                    return response  # type: ignore[no-any-return]
         finally:
             writer.close()
             import contextlib
+
             with contextlib.suppress(ConnectionError):
                 await writer.wait_closed()
 
@@ -207,10 +208,10 @@ class RemoteKineticBrokerClient:
 
                 response = json.loads(response_data.decode())
                 if response.get("triggering_invocation_id") == intent_id or response.get("id") == intent_id:
-                    return response
+                    return response  # type: ignore[no-any-return]
         finally:
             writer.close()
             import contextlib
+
             with contextlib.suppress(ConnectionError):
                 await writer.wait_closed()
-

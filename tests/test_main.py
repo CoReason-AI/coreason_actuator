@@ -67,7 +67,7 @@ def test_action_space_registry() -> None:
         kinetic_separation=None,
     )
     reg_with_tools = ActionSpaceRegistry(manifest)
-    assert reg_with_tools.get_tool("test_tool") == mock_tool
+    assert reg_with_tools.get_tool("test_tool") == mock_tool.model_dump()
 
 
 @pytest.mark.asyncio
