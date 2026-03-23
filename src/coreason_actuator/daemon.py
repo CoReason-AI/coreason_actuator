@@ -126,7 +126,7 @@ class ActuatorDaemon:
             return
 
         # Check backpressure limits
-        max_concurrent = self.backpressure_policy.max_concurrent_tool_invocations
+        max_concurrent = self.backpressure_policy.get("max_concurrent_tool_invocations")
         if max_concurrent is not None and self.active_tasks_count >= max_concurrent:
             logger.warning(
                 "Backpressure limit reached. Shedding load.",
