@@ -114,7 +114,7 @@ def test_sandbox_factory_invalid() -> None:
     # We bypass Pydantic validation here to test the ValueError explicitly.
     # In reality, Pydantic would catch this first.
     state = create_partition_state("wasm32-wasi")
-    object.__setattr__(state, "execution_runtime", "docker")
+    object.__setattr__(state, "execution_runtime", "invalid_runtime")
     with pytest.raises(ValueError, match="Legacy containerization strictly prohibited"):
         SandboxProviderFactory.create(state)
 

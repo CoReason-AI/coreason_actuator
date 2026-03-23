@@ -15,7 +15,6 @@ from coreason_manifest.spec.ontology import (
     JSONRPCErrorResponseState,
     JSONRPCErrorState,
     StateHydrationManifest,
-    TamperFaultEvent,
     ToolInvocationEvent,
 )
 from pydantic import ValidationError
@@ -47,7 +46,7 @@ class IPCValidator:
         try:
             intent = BoundedJSONRPCIntent.model_validate(raw_payload)
         except (ValidationError, TypeError) as e:
-            err_details = getattr(e, "errors", lambda: [{"msg": str(e)}])() if hasattr(e, "errors") else [{"msg": str(e)}]
+            err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
             return JSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=raw_payload.get("id"),
@@ -74,9 +73,9 @@ class IPCValidator:
             )
 
         try:
-            state_hydration_manifest = StateHydrationManifest.model_construct(**state_hydration_dict)
+            state_hydration_manifest = StateHydrationManifest.model_validate(state_hydration_dict)
         except (ValidationError, TypeError) as e:
-            err_details = getattr(e, "errors", lambda: [{"msg": str(e)}])() if hasattr(e, "errors") else [{"msg": str(e)}]
+            err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
             return JSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,
@@ -88,9 +87,9 @@ class IPCValidator:
             )
 
         try:
-            tool_invocation = ToolInvocationEvent.model_construct(**params)
+            tool_invocation = ToolInvocationEvent.model_validate(params)
         except (ValidationError, TypeError, ValueError) as e:
-            err_details = getattr(e, "errors", lambda: [{"msg": str(e)}])() if hasattr(e, "errors") else [{"msg": str(e)}]
+            err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
             return JSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,
@@ -105,27 +104,40 @@ class IPCValidator:
         object.__setattr__(tool_invocation, "state_hydration", state_hydration_manifest)
 
         # Mathematical verification of ZK proof and agent attestation
-        # try:
-        #     self.verifier.verify(tool_invocation)
-        # except TamperFaultEvent as e:
-        #     return JSONRPCErrorResponseState.model_construct(
-        #         jsonrpc="2.0",
-        #         id=intent.id,
-        #         error=JSONRPCErrorState(
-        #             code=403,
-        #             message=f"Cryptographic verification failed: {e!s}",
-        #         ),
-        #     )
+        from coreason_manifest.spec.ontology import TamperFaultEvent
+
+        try:
+            self.verifier.verify(tool_invocation.model_dump())
+        except TamperFaultEvent as e:
+            return JSONRPCErrorResponseState.model_construct(
+                jsonrpc="2.0",
+                id=intent.id,
+                error=JSONRPCErrorState(
+                    code=403,
+                    message=f"Cryptographic verification failed: {e!s}",
+                ),
+            )
 
         # Topological Registry Verification
-        tool_manifest = self.registry.get_tool(tool_invocation.tool_name)
+        tool_name = getattr(tool_invocation, "tool_name", None)
+        if tool_name is None:
+            return JSONRPCErrorResponseState.model_construct(
+                jsonrpc="2.0",
+                id=intent.id,
+                error=JSONRPCErrorState(
+                    code=-32602,
+                    message="Invalid params: Missing tool_name in ToolInvocationEvent.",
+                ),
+            )
+
+        tool_manifest = self.registry.get_tool(tool_name)
         if tool_manifest is None:
             return JSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,
                 error=JSONRPCErrorState(
                     code=-32601,
-                    message=f"Method not found: Tool '{tool_invocation.tool_name}' missing from the registry.",
+                    message=f"Method not found: Tool '{tool_name}' missing from the registry.",
                 ),
             )
 

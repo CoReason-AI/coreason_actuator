@@ -153,7 +153,7 @@ class WasmSandboxProvider:
                 # Execution runs synchronously but is securely capped by engine fuel
                 if "_start" in instance.exports(store):
                     func = instance.exports(store)["_start"]
-                    return func(store)
+                    return func(store)  # type: ignore[operator]
                 return "WASM execution mock success"  # Fallback for mock tests without _start export
             except wasmtime.Trap as e:
                 # Trap explicitly catches Out of Fuel or OOM mathematically
@@ -383,7 +383,7 @@ class SymbolicSandboxProvider:
         import asyncio
         import json
 
-        import z3
+        import z3  # type: ignore[import-untyped]
 
         logger.info(f"Executing Symbolic bytecode ({len(bytecode)} bytes) via z3-solver")
 
@@ -481,13 +481,18 @@ class DockerSandboxProvider:
         import json
 
         logger.info(f"Executing Docker bytecode ({len(bytecode)} bytes)")
-        
+
         full_command = [
-            "docker", "run", "--rm", "-i",
+            "docker",
+            "run",
+            "--rm",
+            "-i",
             f"--memory={self.max_vram_mb}m",
             *self.bwrap_cmd_array,
             "python:3.11-slim",
-            "python", "-c", "import sys; exec(sys.stdin.read())"
+            "python",
+            "-c",
+            "import sys; exec(sys.stdin.read())",
         ]
 
         process = await asyncio.create_subprocess_exec(
@@ -498,6 +503,7 @@ class DockerSandboxProvider:
             stdout, stderr = await asyncio.wait_for(process.communicate(input=bytecode), timeout=self.max_vram_mb / 5)
         except TimeoutError as e:  # pragma: no cover
             import contextlib
+
             with contextlib.suppress(OSError):
                 process.kill()
             raise RuntimeError("Docker execution failed: Timeout") from e
@@ -505,7 +511,7 @@ class DockerSandboxProvider:
         if process.returncode != 0:
             error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
             raise RuntimeError(f"Docker execution failed: {error_msg}")
-            
+
         try:
             return json.loads(stdout.decode("utf-8"))
         except json.JSONDecodeError:
@@ -515,7 +521,8 @@ class DockerSandboxProvider:
         logger.info(f"Tearing down Docker sandbox (force={force})")
         if self.partition_id:
             import subprocess
-            subprocess.run(["docker", "rm", "-f", self.partition_id], capture_output=True, check=False)
+
+            subprocess.run(["docker", "rm", "-f", self.partition_id], capture_output=True, check=False)  # noqa: S603, S607
 
     def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
         logger.info(f"Applying network egress rules for Docker sandbox. Allowed domains: {allowed_domains}")
@@ -536,9 +543,9 @@ class SandboxProviderFactory:
     @staticmethod
     def create(partition_state: EphemeralNamespacePartitionState) -> SandboxProviderProtocol:
         runtime = partition_state.execution_runtime
-        if runtime == "docker":
+        if runtime == "docker":  # type: ignore[comparison-overlap]
             return DockerSandboxProvider()
-        if runtime == "z3-solver":
+        if runtime == "z3-solver":  # type: ignore[comparison-overlap]
             return SymbolicSandboxProvider()
         if runtime == "wasm32-wasi":
             return WasmSandboxProvider()

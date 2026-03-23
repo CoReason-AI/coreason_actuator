@@ -16,12 +16,12 @@ from typing import Any
 
 from coreason_manifest.spec.ontology import (
     BackpressurePolicy,
+    EphemeralNamespacePartitionState,
     JSONRPCErrorResponseState,
     JSONRPCErrorState,
+    LatentSchemaInferenceIntent,
     ObservationEvent,
     ToolInvocationEvent,
-    EphemeralNamespacePartitionState,
-    LatentSchemaInferenceIntent,
 )
 
 from coreason_actuator.ingress import IPCValidator
@@ -149,7 +149,8 @@ class ActuatorDaemon:
         # Latent Research Interception (Bypass ToolInvocationEvent validation)
         if isinstance(raw_payload, dict) and raw_payload.get("method") == "__LATENT_RESEARCH__":
             task = asyncio.create_task(self._dispatch_research_intent(raw_payload))
-            self.active_tasks[raw_payload.get("id")] = task
+            if raw_payload.get("id"):
+                self.active_tasks[str(raw_payload.get("id"))] = task
             return
 
         # Pre-Flight Validation
@@ -162,7 +163,7 @@ class ActuatorDaemon:
 
         # Execute the intent concurrently
         task = asyncio.create_task(self._dispatch_intent(result, raw_payload.get("id"), raw_payload))
-        self.active_tasks[result.event_id] = task
+        self.active_tasks[str(result.event_id)] = task
 
     async def _handle_preemption(self, target_event_id: str) -> None:
         """Handles a BargeInInterruptEvent by attempting to cancel the active task."""
@@ -176,7 +177,9 @@ class ActuatorDaemon:
         logger.info(f"Cancelling task for event: {target_event_id}")
         task.cancel()
 
-    async def _dispatch_intent(self, intent: ToolInvocationEvent, request_id: Any, raw_payload: dict[str, Any] | None = None) -> None:
+    async def _dispatch_intent(
+        self, intent: ToolInvocationEvent, request_id: Any, raw_payload: dict[str, Any] | None = None
+    ) -> None:
         """
         Executes the tool intent via the Do-Operator and returns an ObservationEvent.
         """
@@ -208,7 +211,8 @@ class ActuatorDaemon:
                 partitions_data = raw_payload.get("params", {}).get("partitions", [])
                 if partitions_data:
                     from coreason_actuator.sandbox import SandboxProviderFactory
-                    partition = EphemeralNamespacePartitionState(**partitions_data[0]) 
+
+                    partition = EphemeralNamespacePartitionState(**partitions_data[0])
                     sandbox = SandboxProviderFactory.create(partition)
                     sandbox.provision(partition)
                     self.active_sandboxes[intent.event_id] = sandbox
@@ -225,8 +229,8 @@ class ActuatorDaemon:
 
                 if sandbox and partition_state:
                     # Apply Dual-Evaluation Permission Boundary and immutability checks
-                    verify_network_access(manifest, partition_state, sandbox)
-                    enforce_sandbox_immutability(manifest, sandbox)
+                    verify_network_access(manifest, partition_state, sandbox)  # type: ignore[arg-type]
+                    enforce_sandbox_immutability(manifest, sandbox)  # type: ignore[arg-type]
 
                 # Based on FR-2.3, if allowed_vault_keys is present, unseal secrets and inject into sandbox
                 if session_state and getattr(session_state, "allowed_vault_keys", None) and self.vault:
@@ -237,8 +241,8 @@ class ActuatorDaemon:
 
             sandbox_pid = sandbox
 
-            if not manifest.is_preemptible:
-                inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))
+            if not manifest.get("is_preemptible", True) if isinstance(manifest, dict) else manifest.is_preemptible:
+                inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))  # type: ignore[arg-type]
                 try:
                     result = await asyncio.shield(inner_task)
                 except asyncio.CancelledError:
@@ -252,7 +256,7 @@ class ActuatorDaemon:
                     self.preempted_events.add(intent.event_id)
             else:
                 # Preemptible
-                result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)
+                result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)  # type: ignore[arg-type]
 
             # ZK Proof extraction
             zk_receipt = None
@@ -362,7 +366,7 @@ class ActuatorDaemon:
             self.preempted_events.discard(intent.event_id)
             # Explicitly teardown if it wasn't an explicitly cached session sandbox
             sandbox = self.active_sandboxes.pop(intent.event_id, None)
-            if sandbox and not self.sandbox_cache: 
+            if sandbox and not self.sandbox_cache:
                 await sandbox.teardown(force=True)
 
     async def _dispatch_research_intent(self, raw_payload: dict[str, Any]) -> None:
@@ -374,25 +378,28 @@ class ActuatorDaemon:
         try:
             params = raw_payload.get("params", {})
             intent = LatentSchemaInferenceIntent(**params)
-            
+
             # Spin up the sandbox if partitions are provided
             sandbox = None
             partitions_data = params.get("partitions", [])
             if partitions_data:
                 from coreason_actuator.sandbox import SandboxProviderFactory
-                partition = EphemeralNamespacePartitionState(**partitions_data[0]) 
+
+                partition = EphemeralNamespacePartitionState(**partitions_data[0])
                 sandbox = SandboxProviderFactory.create(partition)
                 sandbox.provision(partition)
-                self.active_sandboxes[request_id] = sandbox
-                
+                if request_id:
+                    self.active_sandboxes[str(request_id)] = sandbox
+
             result = {}
             if sandbox:
                 bytecode = intent.target_buffer_id.encode("utf-8")
-                if intent.formal_grammar_payload:
-                    bytecode = intent.formal_grammar_payload.encode("utf-8")
+                if getattr(intent, "formal_grammar_payload", None):
+                    bytecode = intent.formal_grammar_payload.encode("utf-8")  # type: ignore[attr-defined]
                 result = await sandbox.execute(bytecode)
 
             import time
+
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),
                 triggering_invocation_id=request_id,
@@ -411,7 +418,8 @@ class ActuatorDaemon:
             await self.broker.push(error_response.model_dump())
         finally:
             self.active_tasks_count -= 1
-            self.active_tasks.pop(request_id, None)
-            sandbox = self.active_sandboxes.pop(request_id, None)
+            if request_id:
+                self.active_tasks.pop(str(request_id), None)
+                sandbox = self.active_sandboxes.pop(str(request_id), None)
             if sandbox:
                 await sandbox.teardown(force=True)
