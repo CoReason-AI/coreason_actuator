@@ -567,8 +567,14 @@ async def test_mcp_client_strategy_success() -> None:
     manifest = create_mock_manifest()
 
     mock_proc = AsyncMock()
-    mock_proc.stdin = AsyncMock()
+    mock_proc.stdin = MagicMock()
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.close = MagicMock()
+    mock_proc.stdin.drain = AsyncMock()
+    mock_proc.stdin.wait_closed = AsyncMock()
     mock_proc.stdout = AsyncMock()
+    mock_proc.terminate = MagicMock()
+    mock_proc.wait = AsyncMock()
     mock_response = b'{"jsonrpc": "2.0", "id": "test_event_id_123", "result": "mock_response"}\n'
     mock_proc.stdout.readline.return_value = mock_response
 
@@ -609,8 +615,14 @@ async def test_mcp_client_strategy_stdio_spawn() -> None:
     manifest = create_mock_manifest()
 
     mock_proc = AsyncMock()
-    mock_proc.stdin = AsyncMock()
+    mock_proc.stdin = MagicMock()
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.close = MagicMock()
+    mock_proc.stdin.drain = AsyncMock()
+    mock_proc.stdin.wait_closed = AsyncMock()
     mock_proc.stdout = AsyncMock()
+    mock_proc.terminate = MagicMock()
+    mock_proc.wait = AsyncMock()
     # readline returns a JSON encoded mock response
     mock_response = b'{"jsonrpc": "2.0", "id": "test_event_id_stdio", "result": "stdio_response"}\n'
     mock_proc.stdout.readline.return_value = mock_response
@@ -728,8 +740,14 @@ async def test_mcp_client_strategy_stdio_spawn_no_response() -> None:
     manifest = create_mock_manifest()
 
     mock_proc = AsyncMock()
-    mock_proc.stdin = AsyncMock()
+    mock_proc.stdin = MagicMock()
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.close = MagicMock()
+    mock_proc.stdin.drain = AsyncMock()
+    mock_proc.stdin.wait_closed = AsyncMock()
     mock_proc.stdout = AsyncMock()
+    mock_proc.terminate = MagicMock()
+    mock_proc.wait = AsyncMock()
     mock_proc.stdout.readline.return_value = b""
 
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
@@ -766,8 +784,14 @@ async def test_mcp_client_strategy_stdio_spawn_invalid_json() -> None:
     manifest = create_mock_manifest()
 
     mock_proc = AsyncMock()
-    mock_proc.stdin = AsyncMock()
+    mock_proc.stdin = MagicMock()
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.close = MagicMock()
+    mock_proc.stdin.drain = AsyncMock()
+    mock_proc.stdin.wait_closed = AsyncMock()
     mock_proc.stdout = AsyncMock()
+    mock_proc.terminate = MagicMock()
+    mock_proc.wait = AsyncMock()
     mock_proc.stdout.readline.return_value = b"invalid_json"
 
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
@@ -857,8 +881,14 @@ async def test_mcp_client_strategy_none_parameters() -> None:
     manifest = create_mock_manifest()
 
     mock_proc = AsyncMock()
-    mock_proc.stdin = AsyncMock()
+    mock_proc.stdin = MagicMock()
+    mock_proc.stdin.write = MagicMock()
+    mock_proc.stdin.close = MagicMock()
+    mock_proc.stdin.drain = AsyncMock()
+    mock_proc.stdin.wait_closed = AsyncMock()
     mock_proc.stdout = AsyncMock()
+    mock_proc.terminate = MagicMock()
+    mock_proc.wait = AsyncMock()
     mock_response = b'{"jsonrpc": "2.0", "id": "test_event_id_456", "result": "mock_response"}\n'
     mock_proc.stdout.readline.return_value = mock_response
 
