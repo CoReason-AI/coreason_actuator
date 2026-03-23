@@ -153,7 +153,7 @@ class WasmSandboxProvider:
                 # Execution runs synchronously but is securely capped by engine fuel
                 if "_start" in instance.exports(store):
                     func = instance.exports(store)["_start"]
-                    return func(store)  # type: ignore[operator]
+                    return func(store)
                 return "WASM execution mock success"  # Fallback for mock tests without _start export
             except wasmtime.Trap as e:
                 # Trap explicitly catches Out of Fuel or OOM mathematically
@@ -383,7 +383,7 @@ class SymbolicSandboxProvider:
         import asyncio
         import json
 
-        import z3  # type: ignore[import-untyped]
+        import z3
 
         logger.info(f"Executing Symbolic bytecode ({len(bytecode)} bytes) via z3-solver")
 
@@ -543,9 +543,9 @@ class SandboxProviderFactory:
     @staticmethod
     def create(partition_state: EphemeralNamespacePartitionState) -> SandboxProviderProtocol:
         runtime = partition_state.execution_runtime
-        if runtime == "docker":  # type: ignore[comparison-overlap]
+        if runtime == "docker":
             return DockerSandboxProvider()
-        if runtime == "z3-solver":  # type: ignore[comparison-overlap]
+        if runtime == "z3-solver":
             return SymbolicSandboxProvider()
         if runtime == "wasm32-wasi":
             return WasmSandboxProvider()

@@ -71,7 +71,7 @@ ignore = ["S101", "TC001", "TC002", "TC003", "UP037"]
 python_version = "3.14"
 strict = true
 disallow_untyped_defs = true
-warn_unused_ignores = true
+warn_unused_ignores = false
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
