@@ -456,12 +456,88 @@ class SymbolicSandboxProvider:
                 self.bwrap_cmd_array.extend(["--tmpfs", path])
 
 
+class DockerSandboxProvider:
+    """Docker execution provider for heavily isolated system-level execution."""
+
+    def __init__(self) -> None:
+        self.partition_id: str | None = None
+        self.max_vram_mb: int = 512
+        self.bwrap_cmd_array: list[str] = []
+
+    def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
+        logger.info(f"Provisioning Docker sandbox: {partition_state.partition_id}")
+        self.partition_id = partition_state.partition_id
+        self.max_vram_mb = partition_state.max_vram_mb
+        if self.partition_id:
+            self.bwrap_cmd_array.extend(["--name", self.partition_id])
+
+    def inject_secrets(self, secrets: dict[str, str]) -> None:
+        logger.info(f"Injecting {len(secrets)} secrets into Docker env variables")
+        for key, value in secrets.items():
+            self.bwrap_cmd_array.extend(["-e", f"{key}={value}"])
+
+    async def execute(self, bytecode: bytes) -> Any:
+        import asyncio
+        import json
+
+        logger.info(f"Executing Docker bytecode ({len(bytecode)} bytes)")
+        
+        full_command = [
+            "docker", "run", "--rm", "-i",
+            f"--memory={self.max_vram_mb}m",
+            *self.bwrap_cmd_array,
+            "python:3.11-slim",
+            "python", "-c", "import sys; exec(sys.stdin.read())"
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *full_command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(input=bytecode), timeout=self.max_vram_mb / 5)
+        except TimeoutError as e:  # pragma: no cover
+            import contextlib
+            with contextlib.suppress(OSError):
+                process.kill()
+            raise RuntimeError("Docker execution failed: Timeout") from e
+
+        if process.returncode != 0:
+            error_msg = stderr.decode("utf-8") if stderr else "Unknown error"
+            raise RuntimeError(f"Docker execution failed: {error_msg}")
+            
+        try:
+            return json.loads(stdout.decode("utf-8"))
+        except json.JSONDecodeError:
+            return stdout.decode("utf-8") if stdout else ""
+
+    async def teardown(self, force: bool = False) -> None:
+        logger.info(f"Tearing down Docker sandbox (force={force})")
+        if self.partition_id:
+            import subprocess
+            subprocess.run(["docker", "rm", "-f", self.partition_id], capture_output=True, check=False)
+
+    def apply_network_egress_rules(self, allowed_domains: list[str]) -> None:
+        logger.info(f"Applying network egress rules for Docker sandbox. Allowed domains: {allowed_domains}")
+        if not allowed_domains:
+            self.bwrap_cmd_array.extend(["--network", "none"])
+
+    def enforce_filesystem_immutability(self, tmpfs_exemptions: list[str] | None = None) -> None:
+        logger.info(f"Enforcing Docker filesystem immutability with exemptions: {tmpfs_exemptions}")
+        self.bwrap_cmd_array.append("--read-only")
+        if tmpfs_exemptions:  # pragma: no cover
+            for path in tmpfs_exemptions:
+                self.bwrap_cmd_array.extend(["--tmpfs", f"{path}:rw"])
+
+
 class SandboxProviderFactory:
     """Factory to route provisioning to the correct hypervisor adapter."""
 
     @staticmethod
     def create(partition_state: EphemeralNamespacePartitionState) -> SandboxProviderProtocol:
         runtime = partition_state.execution_runtime
+        if runtime == "docker":
+            return DockerSandboxProvider()
         if runtime == "z3-solver":
             return SymbolicSandboxProvider()
         if runtime == "wasm32-wasi":

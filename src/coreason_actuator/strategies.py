@@ -149,47 +149,35 @@ class NativeExecutionStrategy:
                     if not verify_ast_safety(value):
                         import traceback
 
-                        return ObservationEvent(
-                            event_id=f"obs-{intent.event_id}",
-                            timestamp=1704067200.0,
-                            payload={
-                                "execution_status": "fatal_crash",
-                                "traceback": f"AST safety verification failed for parameter '{key}'.",
-                            },
-                        )
+                        return {
+                            "execution_status": "fatal_crash",
+                            "traceback": f"AST safety verification failed for parameter '{key}'.",
+                        }
                 except ValueError as e:
                     if str(e) == "Payload is not valid syntax.":
                         continue
                     # Any other parsing or value errors from verify_ast_safety should also be trapped
                     import traceback
 
-                    return ObservationEvent(
-                        event_id=f"obs-{intent.event_id}",
-                        timestamp=1704067200.0,
-                        payload={
-                            "execution_status": "fatal_crash",
-                            "traceback": traceback.format_exc(),
-                        },
-                    )
+                    return {
+                        "execution_status": "fatal_crash",
+                        "traceback": traceback.format_exc(),
+                    }
                 except Exception:
                     # Broad catch-all for AST parsing failures to prevent bubbling unhandled exceptions
                     import traceback
 
-                    return ObservationEvent(
-                        event_id=f"obs-{intent.event_id}",
-                        timestamp=1704067200.0,
-                        payload={
-                            "execution_status": "fatal_crash",
-                            "traceback": traceback.format_exc(),
-                        },
-                    )
+                    return {
+                        "execution_status": "fatal_crash",
+                        "traceback": traceback.format_exc(),
+                    }
 
         # Idempotency Rules
-        side_effects = manifest.side_effects
+        side_effects = getattr(manifest, "side_effects", None)
 
         # Determine if we need to lock
-        mutates_state = getattr(side_effects, "mutates_state", False)
-        is_idempotent = getattr(side_effects, "is_idempotent", False)
+        mutates_state = getattr(side_effects, "mutates_state", False) if side_effects else False
+        is_idempotent = getattr(side_effects, "is_idempotent", False) if side_effects else False
 
         async def _do_execute() -> Any:
             # The actual execution of the callable

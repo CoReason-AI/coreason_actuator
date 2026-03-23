@@ -11,7 +11,13 @@
 import asyncio
 from typing import Any
 
-from coreason_manifest.spec.ontology import EvictionPolicy, ToolInvocationEvent, ToolManifest
+from coreason_manifest.spec.ontology import (
+    EphemeralNamespacePartitionState,
+    EvictionPolicy,
+    LatentSchemaInferenceIntent,
+    ToolInvocationEvent,
+    ToolManifest,
+)
 
 from coreason_actuator.daemon import ActuatorDaemon
 from coreason_actuator.interfaces import IPCBrokerProtocol
@@ -42,7 +48,11 @@ class ActuatorEngine:
             self.daemon.register_task(task)
 
     async def execute(
-        self, intent: ToolInvocationEvent, manifest: ToolManifest, eviction_policy: EvictionPolicy | None = None
+        self,
+        intent: ToolInvocationEvent,
+        manifest: ToolManifest,
+        eviction_policy: EvictionPolicy | None = None,
+        partitions: list[EphemeralNamespacePartitionState] | None = None,
     ) -> dict[str, Any]:
         """
         Awaits an authorized tool execution and returns a raw, verifiable JSON result.
@@ -59,6 +69,9 @@ class ActuatorEngine:
         payload["manifest"] = manifest.model_dump()
         if eviction_policy is not None:
             payload["eviction_policy"] = eviction_policy.model_dump()
+            
+        if partitions is not None:
+            payload["partitions"] = [p.model_dump() for p in partitions]
 
         # Hydrate the dynamic state manifest into the payload out-of-band
         if hasattr(intent, "state_hydration") and intent.state_hydration is not None:
@@ -91,5 +104,40 @@ class ActuatorEngine:
 
             # If the payload belongs to another event, yield and ideally put it back
             # For this simple polling mechanism without specific queues, we push it back.
+            await self.broker.push(response)
+            await asyncio.sleep(0.01)
+
+    async def execute_research_intent(
+        self, intent: LatentSchemaInferenceIntent, partitions: list[EphemeralNamespacePartitionState] | None = None
+    ) -> dict[str, Any]:
+        """
+        Dispatches a high-order LatentSchemaInferenceIntent (Phase 4) across the IPC boundary.
+        """
+        await self._start_daemon_if_needed()
+
+        payload = intent.model_dump()
+        if partitions is not None:
+            payload["partitions"] = [p.model_dump() for p in partitions]
+
+        packet = {
+            "jsonrpc": "2.0",
+            "id": getattr(intent, "event_id", getattr(intent, "target_buffer_id", "unknown")),
+            "method": "__LATENT_RESEARCH__",
+            "params": payload,
+        }
+
+        logger.info(f"Engine dispatching research intent {packet['id']} to broker.")
+        await self.broker.push(packet)
+
+        while True:
+            response = await self.broker.pull()
+            if response.get("triggering_invocation_id") == packet["id"]:
+                logger.info(f"Engine received ObservationEvent for research intent {packet['id']}.")
+                return response
+
+            if response.get("id") == packet["id"] and "error" in response:
+                logger.error(f"Engine received JSONRPCErrorResponseState for research intent {packet['id']}.")
+                return response
+
             await self.broker.push(response)
             await asyncio.sleep(0.01)
