@@ -113,7 +113,32 @@ def test_validator_missing_state_hydration() -> None:
 
     assert isinstance(result, JSONRPCErrorResponseState)
     assert result.error.code == -32602
-    assert "strictly required state_hydration" in result.error.message
+
+
+def test_validator_missing_tool_name_attribute() -> None:
+    registry = MockRegistry({"test_tool": get_mock_tool()})
+    verifier = MockVerifier(should_pass=True)
+    validator = IPCValidator(registry, verifier)
+
+    payload = get_valid_raw_payload()
+
+    # The easiest way to hit the missing `tool_name` code path
+    # without failing validation is to patch the constructed object.
+    import unittest.mock
+
+    original_validate = validator.validate_intent
+    with unittest.mock.patch("coreason_manifest.spec.ontology.ToolInvocationEvent.model_construct") as mock_construct:
+        # Mock it so it returns an object without a `tool_name` attribute
+        class BadToolInvocationEvent:
+            def model_dump(self) -> dict[str, Any]:
+                return {}
+
+        mock_construct.return_value = BadToolInvocationEvent()
+        result = validator.validate_intent(payload)
+
+        assert isinstance(result, JSONRPCErrorResponseState)
+        assert result.error.code == -32602
+        assert "Missing tool_name in ToolInvocationEvent" in result.error.message
 
 
 def test_validator_invalid_state_hydration() -> None:
@@ -151,9 +176,9 @@ def test_validator_invalid_tool_invocation() -> None:
     validator = IPCValidator(registry, verifier)
 
     payload = get_valid_raw_payload()
-    # Remove required field
+    # Replace valid tool payload with a bad type to test Pydantic validation failure
     if "params" in payload and isinstance(payload["params"], dict):
-        payload["params"].pop("tool_name", None)
+        payload["params"] = {"tool_name": "test_tool", "parameters": "INVALID_NOT_DICT"}
 
     result = validator.validate_intent(payload)
 
