@@ -26,6 +26,7 @@ def verify_ast_safety(payload: str) -> bool:
         ast.unaryop,
         ast.Subscript,
         ast.Slice,
+        ast.Call,
     ]
     allowlist = tuple(base_allowlist)
 

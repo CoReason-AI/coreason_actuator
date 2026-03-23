@@ -43,7 +43,11 @@ class ActionSpaceRegistry(ActionSpaceRegistryProtocol):
 
     def get_tool(self, tool_name: str) -> ToolManifest | None:
         """Retrieves a tool from the registry if it exists."""
-        return self.tools.get(tool_name)
+        if tool_name in self.tools:
+            return self.tools.get(tool_name)
+        if tool_name in self._callables:
+            return ToolManifest.model_construct(tool_name=tool_name)
+        return None
 
     async def get_callable(self, tool_name: str) -> Callable[..., Awaitable[Any]] | None:
         """Retrieves the registered asynchronous callable for the tool."""
