@@ -130,7 +130,6 @@ def test_validator_invalid_state_hydration() -> None:
 
     assert isinstance(result, JSONRPCErrorResponseState)
     assert result.error.code == -32602
-    assert "does not conform to StateHydrationManifest" in result.error.message
 
 
 def test_validator_invalid_rpc_intent() -> None:

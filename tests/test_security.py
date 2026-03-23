@@ -11,12 +11,9 @@
 import hashlib
 import json
 from typing import Any
-from unittest.mock import MagicMock
 
-import pytest
 from coreason_manifest.spec.ontology import (
     AgentAttestationReceipt,
-    TamperFaultEvent,
     ToolInvocationEvent,
     ZeroKnowledgeReceipt,
 )
