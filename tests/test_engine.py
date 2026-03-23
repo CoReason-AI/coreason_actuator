@@ -103,6 +103,9 @@ async def test_engine_execute_success() -> None:
         agent_attestation=create_mock_attestation(),
     )
 
+    intent_dict = intent.model_dump()
+    intent_dict["extra_unwanted_field"] = "should_be_stripped"
+
     manifest = create_mock_manifest()
 
     # Pre-populate the response queue in the broker
@@ -116,7 +119,7 @@ async def test_engine_execute_success() -> None:
     broker.responses.append(expected_response)
 
     # Execute
-    result = await engine.execute(intent, manifest)
+    result = await engine.execute(intent_dict, manifest.model_dump())
 
     # Assertions
     assert result == expected_response
@@ -128,6 +131,7 @@ async def test_engine_execute_success() -> None:
     assert pushed["id"] == event_id
     assert pushed["method"] == "test_tool"
     assert pushed["params"]["tool_name"] == "test_tool"
+    assert "extra_unwanted_field" not in pushed["params"]
 
 
 @pytest.mark.asyncio
@@ -209,7 +213,10 @@ async def test_engine_execute_with_state_hydration() -> None:
 
     eviction_policy = EvictionPolicy(strategy="fifo", max_retained_tokens=500)
 
-    result = await engine.execute(intent, manifest, eviction_policy)
+    intent_dict = intent.model_dump()
+    intent_dict["state_hydration"] = hydration.model_dump()
+
+    result = await engine.execute(intent_dict, manifest.model_dump(), eviction_policy.model_dump())
 
     assert result == expected_response
 
@@ -237,6 +244,9 @@ async def test_engine_execute_ignores_other_messages() -> None:
         agent_attestation=create_mock_attestation(),
     )
 
+    intent_dict = intent.model_dump()
+    intent_dict["extra_unwanted_field"] = "should_be_stripped"
+
     manifest = create_mock_manifest()
 
     # Queue up a different message first, then the correct one
@@ -251,7 +261,7 @@ async def test_engine_execute_ignores_other_messages() -> None:
     broker.responses.append(other_message)
     broker.responses.append(expected_response)
 
-    result = await engine.execute(intent, manifest)
+    result = await engine.execute(intent_dict, manifest.model_dump(), None, [{"partition_id": "part1"}])
 
     assert result == expected_response
     # Verify the other message was pushed back to the queue
@@ -274,6 +284,9 @@ async def test_engine_execute_handles_jsonrpc_error() -> None:
         agent_attestation=create_mock_attestation(),
     )
 
+    intent_dict = intent.model_dump()
+    intent_dict["extra_unwanted_field"] = "should_be_stripped"
+
     manifest = create_mock_manifest()
 
     expected_response = {
@@ -286,5 +299,5 @@ async def test_engine_execute_handles_jsonrpc_error() -> None:
     }
     broker.responses.append(expected_response)
 
-    result = await engine.execute(intent, manifest)
+    result = await engine.execute(intent_dict, manifest.model_dump())
     assert result == expected_response
