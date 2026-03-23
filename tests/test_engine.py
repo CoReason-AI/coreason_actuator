@@ -116,7 +116,7 @@ async def test_engine_execute_success() -> None:
     broker.responses.append(expected_response)
 
     # Execute
-    result = await engine.execute(intent, manifest)
+    result = await engine.execute(intent.model_dump(), manifest.model_dump())
 
     # Assertions
     assert result == expected_response
@@ -209,7 +209,10 @@ async def test_engine_execute_with_state_hydration() -> None:
 
     eviction_policy = EvictionPolicy(strategy="fifo", max_retained_tokens=500)
 
-    result = await engine.execute(intent, manifest, eviction_policy)
+    intent_dict = intent.model_dump()
+    intent_dict["state_hydration"] = hydration.model_dump()
+
+    result = await engine.execute(intent_dict, manifest.model_dump(), eviction_policy.model_dump())
 
     assert result == expected_response
 
@@ -251,7 +254,7 @@ async def test_engine_execute_ignores_other_messages() -> None:
     broker.responses.append(other_message)
     broker.responses.append(expected_response)
 
-    result = await engine.execute(intent, manifest)
+    result = await engine.execute(intent.model_dump(), manifest.model_dump())
 
     assert result == expected_response
     # Verify the other message was pushed back to the queue
@@ -286,5 +289,5 @@ async def test_engine_execute_handles_jsonrpc_error() -> None:
     }
     broker.responses.append(expected_response)
 
-    result = await engine.execute(intent, manifest)
+    result = await engine.execute(intent.model_dump(), manifest.model_dump())
     assert result == expected_response
