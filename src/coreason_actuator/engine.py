@@ -66,7 +66,7 @@ class ActuatorEngine:
         payload = intent.model_dump()
 
         # Pass manifest and eviction policy in the payload so the worker can enforce constraints
-        payload["manifest"] = manifest.model_dump()
+        payload["manifest"] = manifest.model_dump(mode="json")
         if eviction_policy is not None:
             payload["eviction_policy"] = eviction_policy.model_dump()
             

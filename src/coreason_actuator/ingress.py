@@ -120,6 +120,18 @@ class IPCValidator:
         # Topological Registry Verification
         tool_manifest = self.registry.get_tool(tool_invocation.tool_name)
         if tool_manifest is None:
+            manifest_dict = params.get("manifest")
+            if manifest_dict:
+                from coreason_manifest.spec.ontology import ToolManifest, MCPServerManifest
+                try:
+                    if "server_id" in manifest_dict:
+                        tool_manifest = MCPServerManifest.model_construct(**manifest_dict)
+                    else:
+                        tool_manifest = ToolManifest.model_construct(**manifest_dict)
+                except Exception:
+                    pass
+                    
+        if tool_manifest is None:
             return JSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,
@@ -129,4 +141,5 @@ class IPCValidator:
                 ),
             )
 
+        object.__setattr__(tool_invocation, "manifest", tool_manifest)
         return tool_invocation

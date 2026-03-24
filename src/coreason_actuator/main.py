@@ -35,16 +35,25 @@ class ActionSpaceRegistry(ActionSpaceRegistryProtocol):
 
     def __init__(self, manifest: ActionSpaceManifest | None = None) -> None:
         self.tools: dict[str, ToolManifest] = {}
+        self.mcp_servers: dict[str, Any] = {}
         self._callables: dict[str, Callable[..., Awaitable[Any]]] = {}
         if manifest:
             for tool in getattr(manifest, "native_tools", []):
                 name = getattr(tool, "tool_name", getattr(tool, "name", "unknown"))
                 self.tools[name] = tool
+            for mcp in getattr(manifest, "mcp_servers", []):
+                self.mcp_servers[mcp.server_id] = mcp
+                whitelist = getattr(mcp, "capability_whitelist", None)
+                if whitelist and hasattr(whitelist, "allowed_tools"):
+                    for t_name in whitelist.allowed_tools:
+                        self.mcp_servers[t_name] = mcp
 
-    def get_tool(self, tool_name: str) -> ToolManifest | None:
+    def get_tool(self, tool_name: str) -> ToolManifest | Any | None:
         """Retrieves a tool from the registry if it exists."""
         if tool_name in self.tools:
             return self.tools.get(tool_name)
+        if hasattr(self, "mcp_servers") and tool_name in self.mcp_servers:
+            return self.mcp_servers.get(tool_name)
         if tool_name in self._callables:
             return ToolManifest.model_construct(tool_name=tool_name)
         return None

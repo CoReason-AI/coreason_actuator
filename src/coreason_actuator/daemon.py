@@ -185,7 +185,7 @@ class ActuatorDaemon:
 
         try:
             # Get manifest from registry to pass to execution strategy
-            manifest = self.registry.get_tool(intent.tool_name)
+            manifest = getattr(intent, "manifest", None) or self.registry.get_tool(intent.tool_name)
             if not manifest:
                 logger.error(f"ToolManifest not found for tool: {intent.tool_name}")
                 error_response = JSONRPCErrorResponseState(
@@ -237,22 +237,100 @@ class ActuatorDaemon:
 
             sandbox_pid = sandbox
 
-            if not manifest.is_preemptible:
-                inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))
-                try:
-                    result = await asyncio.shield(inner_task)
-                except asyncio.CancelledError:
-                    # Outer task was cancelled (barge-in received).
-                    # But since it's not preemptible, we must wait for it to finish!
-                    logger.info(
-                        f"Task for {intent.event_id} was preempted, but is not preemptible. Waiting for completion."
-                    )
-                    result = await inner_task
-                    # We must emit completed_under_preemption
-                    self.preempted_events.add(intent.event_id)
+            # Check if it's an MCPServerManifest
+            is_mcp = hasattr(manifest, "server_id") and hasattr(manifest, "transport")
+            if is_mcp:
+                transport_obj = getattr(manifest, "transport", {})
+                uri = getattr(transport_obj, "uri", "") if not isinstance(transport_obj, dict) else transport_obj.get("uri", "")
+                if uri:
+                    import httpx
+                    import json
+                    from urllib.parse import urljoin
+                    init_packet = {
+                        "jsonrpc": "2.0",
+                        "id": "init_1",
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {},
+                            "clientInfo": {"name": "coreason", "version": "1.0.0"}
+                        }
+                    }
+                    notif_packet = {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/initialized"
+                    }
+                    exec_packet = {
+                        "jsonrpc": "2.0",
+                        "id": getattr(intent, "event_id", "mcp_evt"),
+                        "method": "tools/call",
+                        "params": {
+                            "name": intent.tool_name,
+                            "arguments": intent.parameters or {}
+                        }
+                    }
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            async with client.stream("GET", uri, headers={"Accept": "text/event-stream"}, timeout=60.0) as response:
+                                current_event = None
+                                endpoint_url = None
+                                step = "init"
+                                async for line in response.aiter_lines():
+                                    if not line.strip():
+                                        current_event = None
+                                        continue
+                                    if line.startswith("event: "):
+                                        current_event = line[7:].strip()
+                                    elif line.startswith("data: "):
+                                        data_str = line[6:].strip()
+                                        if current_event == "endpoint" and not endpoint_url:
+                                            endpoint_url = urljoin(uri, data_str)
+                                            # Send Init
+                                            await client.post(endpoint_url, json=init_packet, timeout=60.0)
+                                        elif current_event == "message" and data_str:
+                                            try:
+                                                msg = json.loads(data_str)
+                                                if step == "init" and msg.get("id") == "init_1":
+                                                    await client.post(endpoint_url, json=notif_packet, timeout=60.0)
+                                                    # Proceed to Execution
+                                                    step = "exec"
+                                                    await client.post(endpoint_url, json=exec_packet, timeout=60.0)
+                                                elif step == "exec" and msg.get("id") == exec_packet["id"]:
+                                                    if "error" in msg:
+                                                        await self.broker.push(JSONRPCErrorResponseState(
+                                                            jsonrpc="2.0", id=request_id,
+                                                            error=JSONRPCErrorState(code=msg["error"].get("code", -32603), message=msg["error"].get("message", "MCP execution fault"))
+                                                        ).model_dump())
+                                                        return
+                                                    else:
+                                                        mcp_result = msg.get("result", {})
+                                                        if isinstance(mcp_result, dict) and "content" in mcp_result and isinstance(mcp_result["content"], list):
+                                                            texts = [c.get("text", "") for c in mcp_result["content"] if isinstance(c, dict) and c.get("type") == "text"]
+                                                            mcp_result = {"content": "\n".join(texts) if texts else str(mcp_result)}
+                                                        result = mcp_result
+                                                    break
+                                            except json.JSONDecodeError:
+                                                pass
+                    except Exception as e:
+                        await self.broker.push(JSONRPCErrorResponseState(jsonrpc="2.0", id=request_id, error=JSONRPCErrorState(code=-32000, message=str(e))).model_dump())
+                        return
+                else:
+                    await self.broker.push(JSONRPCErrorResponseState(jsonrpc="2.0", id=request_id, error=JSONRPCErrorState(code=-32603, message="Missing MCP URI")).model_dump())
+                    return
             else:
-                # Preemptible
-                result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)
+                if not manifest.is_preemptible:
+                    inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))
+                    try:
+                        result = await asyncio.shield(inner_task)
+                    except asyncio.CancelledError:
+                        logger.info(
+                            f"Task for {intent.event_id} was preempted, but is not preemptible. Waiting for completion."
+                        )
+                        result = await inner_task
+                        self.preempted_events.add(intent.event_id)
+                else:
+                    # Preemptible
+                    result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)
 
             # ZK Proof extraction
             zk_receipt = None
