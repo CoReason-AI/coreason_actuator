@@ -126,10 +126,10 @@ class RemoteKineticBrokerClient:
 
     async def execute(
         self,
-        intent: ToolInvocationEvent,
-        manifest: ToolManifest,
-        eviction_policy: EvictionPolicy | None = None,
-        partitions: list[EphemeralNamespacePartitionState] | None = None,
+        intent: dict[str, Any],
+        manifest: dict[str, Any],
+        eviction_policy: dict[str, Any] | None = None,
+        partitions: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Proxies the payload over TCP and strictly awaits the JSON-RPC response."""
         parsed = urlparse(self.broker_uri)
@@ -138,21 +138,24 @@ class RemoteKineticBrokerClient:
 
         reader, writer = await asyncio.open_connection(host, port)
         try:
-            payload = intent.model_dump()
-            payload["manifest"] = manifest.model_dump()
+            payload = intent.copy()
+            payload["manifest"] = manifest
             if eviction_policy is not None:
-                payload["eviction_policy"] = eviction_policy.model_dump()
+                payload["eviction_policy"] = eviction_policy
 
             if partitions is not None:
-                payload["partitions"] = [p.model_dump() for p in partitions]
+                payload["partitions"] = partitions
 
-            if hasattr(intent, "state_hydration") and intent.state_hydration is not None:
-                payload["state_hydration"] = intent.state_hydration.model_dump()
+            if "state_hydration" in intent and intent["state_hydration"] is not None:
+                payload["state_hydration"] = intent["state_hydration"]
+
+            intent_id = intent.get("event_id")
+            tool_name = intent.get("tool_name")
 
             packet = {
                 "jsonrpc": "2.0",
-                "id": intent.event_id,
-                "method": intent.tool_name,
+                "id": intent_id,
+                "method": tool_name,
                 "params": payload,
             }
 
@@ -166,7 +169,7 @@ class RemoteKineticBrokerClient:
                     raise ConnectionError("Remote IPC Broker closed the connection unexpectedly.")
 
                 response = json.loads(response_data.decode())
-                if response.get("triggering_invocation_id") == intent.event_id or response.get("id") == intent.event_id:
+                if response.get("triggering_invocation_id") == intent_id or response.get("id") == intent_id:
                     return response  # type: ignore[no-any-return]
         finally:
             writer.close()
@@ -176,7 +179,7 @@ class RemoteKineticBrokerClient:
                 await writer.wait_closed()
 
     async def execute_research_intent(
-        self, intent: LatentSchemaInferenceIntent, partitions: list[EphemeralNamespacePartitionState] | None = None
+        self, intent: dict[str, Any], partitions: list[dict[str, Any]] | None = None
     ) -> dict[str, Any]:
         """Proxies a high-order research intent over TCP."""
         parsed = urlparse(self.broker_uri)
@@ -185,11 +188,11 @@ class RemoteKineticBrokerClient:
 
         reader, writer = await asyncio.open_connection(host, port)
         try:
-            payload = intent.model_dump()
+            payload = intent.copy()
             if partitions is not None:
-                payload["partitions"] = [p.model_dump() for p in partitions]
+                payload["partitions"] = partitions
 
-            intent_id = getattr(intent, "event_id", getattr(intent, "target_buffer_id", "unknown"))
+            intent_id = intent.get("event_id", intent.get("target_buffer_id", "unknown"))
             packet = {
                 "jsonrpc": "2.0",
                 "id": intent_id,
