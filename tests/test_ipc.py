@@ -1,10 +1,10 @@
-import asyncio
 import json
-import pytest
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from coreason_actuator.ipc import IPCBrokerServer, RemoteKineticBrokerClient
+
 
 @pytest.mark.asyncio
 async def test_ipc_broker_server_start_and_close() -> None:
@@ -14,6 +14,7 @@ async def test_ipc_broker_server_start_and_close() -> None:
     await server.close()
     assert server._server is None
 
+
 @pytest.mark.asyncio
 async def test_ipc_broker_server_pull_push_error() -> None:
     server = IPCBrokerServer("tcp://127.0.0.1:0")
@@ -21,6 +22,7 @@ async def test_ipc_broker_server_pull_push_error() -> None:
         await server.pull()
     with pytest.raises(RuntimeError, match="IPCBrokerServer is not running"):
         await server.push({"test": "msg"})
+
 
 @pytest.mark.asyncio
 async def test_ipc_broker_server_push_pull_flow() -> None:
@@ -37,6 +39,7 @@ async def test_ipc_broker_server_push_pull_flow() -> None:
 
     await server.close()
 
+
 @pytest.mark.asyncio
 async def test_remote_broker_client_execute() -> None:
     client = RemoteKineticBrokerClient("tcp://127.0.0.1:5555")
@@ -45,7 +48,7 @@ async def test_remote_broker_client_execute() -> None:
         "event_id": "test_id",
         "tool_name": "test_tool",
         "parameters": {},
-        "state_hydration": {"some_state": True}
+        "state_hydration": {"some_state": True},
     }
     manifest = {"tool_name": "test_tool"}
     eviction_policy = {"strategy": "fifo"}
@@ -53,9 +56,7 @@ async def test_remote_broker_client_execute() -> None:
 
     mock_reader = AsyncMock()
     mock_writer = AsyncMock()
-    mock_reader.readline.side_effect = [
-        json.dumps({"id": "test_id", "result": "success"}).encode() + b"\n"
-    ]
+    mock_reader.readline.side_effect = [json.dumps({"id": "test_id", "result": "success"}).encode() + b"\n"]
 
     with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
         result = await client.execute(intent, manifest, eviction_policy, partitions)
@@ -68,17 +69,12 @@ async def test_remote_broker_client_execute() -> None:
 async def test_remote_broker_client_research_intent() -> None:
     client = RemoteKineticBrokerClient("tcp://127.0.0.1:5555")
 
-    intent = {
-        "event_id": "test_id",
-        "target_buffer_id": "target1"
-    }
+    intent = {"event_id": "test_id", "target_buffer_id": "target1"}
     partitions = [{"partition_id": "part1"}]
 
     mock_reader = AsyncMock()
     mock_writer = AsyncMock()
-    mock_reader.readline.side_effect = [
-        json.dumps({"id": "test_id", "result": "success"}).encode() + b"\n"
-    ]
+    mock_reader.readline.side_effect = [json.dumps({"id": "test_id", "result": "success"}).encode() + b"\n"]
 
     with patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)):
         result = await client.execute_research_intent(intent, partitions)
@@ -103,7 +99,7 @@ async def test_remote_broker_client_execute_connection_closed() -> None:
 
     with (
         patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)),
-        pytest.raises(ConnectionError, match=r"Remote IPC Broker closed the connection unexpectedly\.")
+        pytest.raises(ConnectionError, match=r"Remote IPC Broker closed the connection unexpectedly\."),
     ):
         await client.execute(intent, manifest)
 
@@ -122,6 +118,6 @@ async def test_remote_broker_client_research_intent_connection_closed() -> None:
 
     with (
         patch("asyncio.open_connection", return_value=(mock_reader, mock_writer)),
-        pytest.raises(ConnectionError, match=r"Remote IPC Broker closed the connection unexpectedly\.")
+        pytest.raises(ConnectionError, match=r"Remote IPC Broker closed the connection unexpectedly\."),
     ):
         await client.execute_research_intent(intent)
