@@ -70,7 +70,7 @@ class HashiCorpVault:
 class SandboxProviderProtocol(Protocol):
     """Abstract implementations MUST strictly map to the coreason-manifest bounds."""
 
-    def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
+    def provision(self, partition_state: Any) -> None:
         """Dynamically provisions the execution boundary."""
         ...
 
