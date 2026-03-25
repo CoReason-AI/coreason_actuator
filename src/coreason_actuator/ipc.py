@@ -14,14 +14,6 @@ import json
 from typing import Any
 from urllib.parse import urlparse
 
-from coreason_manifest.spec.ontology import (
-    EphemeralNamespacePartitionState,
-    EvictionPolicy,
-    LatentSchemaInferenceIntent,
-    ToolInvocationEvent,
-    ToolManifest,
-)
-
 from coreason_actuator.interfaces import IPCBrokerProtocol
 from coreason_actuator.utils.logger import logger
 
