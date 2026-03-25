@@ -11,18 +11,9 @@
 import asyncio
 import time
 import traceback
+import types
 import uuid
 from typing import Any
-
-from coreason_manifest.spec.ontology import (
-    BackpressurePolicy,
-    EphemeralNamespacePartitionState,
-    JSONRPCErrorResponseState,
-    JSONRPCErrorState,
-    LatentSchemaInferenceIntent,
-    ObservationEvent,
-    ToolInvocationEvent,
-)
 
 from coreason_actuator.ingress import IPCValidator
 from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, IPCBrokerProtocol
@@ -60,7 +51,7 @@ class ActuatorDaemon:
         self,
         broker: IPCBrokerProtocol,
         validator: IPCValidator,
-        backpressure_policy: BackpressurePolicy,
+        backpressure_policy: dict[str, Any],
         execution_strategy: ExecutionStrategyProtocol,
         registry: ActionSpaceRegistryProtocol,
         vault: EnterpriseVaultProtocol | None = None,
@@ -134,16 +125,16 @@ class ActuatorDaemon:
                 max=max_concurrent,
             )
             # Yield error response immediately to the broker ingress queue (or response queue)
-            error_response = JSONRPCErrorResponseState(
-                jsonrpc="2.0",
-                id=raw_payload.get("id", None),
-                error=JSONRPCErrorState(
-                    code=429,
-                    message="Too Many Requests: Daemon execution pool is saturated.",
-                    data={"active_tasks": self.active_tasks_count},
-                ),
-            )
-            await self.broker.push(error_response.model_dump())
+            error_response = {
+                "jsonrpc": "2.0",
+                "id": raw_payload.get("id", None),
+                "error": {
+                    "code": 429,
+                    "message": "Too Many Requests: Daemon execution pool is saturated.",
+                    "data": {"active_tasks": self.active_tasks_count},
+                },
+            }
+            await self.broker.push(error_response)
             return
 
         # Latent Research Interception (Bypass ToolInvocationEvent validation)
@@ -205,11 +196,8 @@ class ActuatorDaemon:
         event_id = intent.get("event_id", request_id)
 
         # execution strategies expect an intent object with tool_name, parameters, event_id, etc
-        try:
-            intent_obj = ToolInvocationEvent.model_validate(intent)
-        except Exception:
-            # mock environments or fallback
-            intent_obj = ToolInvocationEvent.model_construct(**intent)
+        # duck type it for the strategies
+        intent_obj = types.SimpleNamespace(**intent)
 
         logger.info(f"Dispatched tool invocation: {tool_name}", request_id=request_id)
 
@@ -218,15 +206,15 @@ class ActuatorDaemon:
             manifest = self.registry.get_tool(tool_name)
             if not manifest:
                 logger.error(f"ToolManifest not found for tool: {tool_name}")
-                error_response = JSONRPCErrorResponseState(
-                    jsonrpc="2.0",
-                    id=request_id,
-                    error=JSONRPCErrorState(
-                        code=-32601,
-                        message=f"Method not found: Tool '{tool_name}' missing from the registry.",
-                    ),
-                )
-                await self.broker.push(error_response.model_dump())
+                error_response = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32601,
+                        "message": f"Method not found: Tool '{tool_name}' missing from the registry.",
+                    },
+                }
+                await self.broker.push(error_response)
                 return
 
             # Execute Do-Operator
@@ -239,20 +227,29 @@ class ActuatorDaemon:
                 if partitions_data:
                     from coreason_actuator.sandbox import SandboxProviderFactory
 
-                    partition = EphemeralNamespacePartitionState(**partitions_data[0])
-                    sandbox = SandboxProviderFactory.create(partition)
+                    partition_data = partitions_data[0]
+                    partition = types.SimpleNamespace(**partition_data)
+                    sandbox = SandboxProviderFactory.create(partition)  # type: ignore[arg-type]
                     sandbox.provision(partition)
                     self.active_sandboxes[event_id] = sandbox
 
             # Extract session state from the state_hydration attached to intent dictionary
             state_hydration = intent.get("state_hydration")
             if state_hydration:
-                session_state = getattr(state_hydration, "session_state", None)
-                partition_state = getattr(state_hydration, "partition_state", None)
+                if isinstance(state_hydration, dict):
+                    session_state = state_hydration.get("session_state")
+                    partition_state = state_hydration.get("partition_state")
+                    if isinstance(session_state, dict):
+                        session_state = types.SimpleNamespace(**session_state)
+                    if isinstance(partition_state, dict):
+                        partition_state = types.SimpleNamespace(**partition_state)
+                else:
+                    session_state = getattr(state_hydration, "session_state", None)
+                    partition_state = getattr(state_hydration, "partition_state", None)
 
                 # Provision or get sandbox via StatefulSandboxCache if available
                 if self.sandbox_cache and session_state and partition_state and not sandbox:
-                    sandbox = await self.sandbox_cache.get_or_create(session_state, partition_state)
+                    sandbox = await self.sandbox_cache.get_or_create(session_state, partition_state)  # type: ignore[arg-type]
                     self.active_sandboxes[event_id] = sandbox
 
                 if sandbox and partition_state:
@@ -293,16 +290,14 @@ class ActuatorDaemon:
             ):  # pragma: no cover
                 import hashlib
 
-                from coreason_manifest.spec.ontology import ZeroKnowledgeReceipt
-
                 actual_result, blob_dict = result
                 result = actual_result
-                zk_receipt = ZeroKnowledgeReceipt.model_construct(
-                    proof_protocol="zk-STARK",
-                    public_inputs_hash=hashlib.sha256(b"mock").hexdigest(),
-                    verifier_key_id="mock",
-                    cryptographic_blob=blob_dict,
-                )
+                zk_receipt = {
+                    "proof_protocol": "zk-STARK",
+                    "public_inputs_hash": hashlib.sha256(b"mock").hexdigest(),
+                    "verifier_key_id": "mock",
+                    "cryptographic_blob": blob_dict,
+                }
 
             # Successful Execution
             payload = {"result": result} if not isinstance(result, dict) else result
@@ -323,25 +318,20 @@ class ActuatorDaemon:
                     else:
                         truncation_metadata = ext_metadata
 
-            observation = ObservationEvent(
-                event_id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                type="observation",
-                payload=payload,
-                triggering_invocation_id=event_id,
-            )
+            obs_dict = {
+                "event_id": str(uuid.uuid4()),
+                "timestamp": time.time(),
+                "type": "observation",
+                "payload": payload,
+                "triggering_invocation_id": event_id,
+            }
+
             if truncation_metadata:  # pragma: no cover
-                object.__setattr__(observation, "truncation_metadata", truncation_metadata)
+                obs_dict["truncation_metadata"] = truncation_metadata
             if zk_receipt:  # pragma: no cover
-                object.__setattr__(observation, "zk_proof", zk_receipt)
+                obs_dict["zk_proof"] = zk_receipt
 
             logger.info(f"Tool {tool_name} executed successfully.")
-
-            obs_dict = observation.model_dump()
-            if hasattr(observation, "truncation_metadata"):  # pragma: no cover
-                obs_dict["truncation_metadata"] = observation.truncation_metadata
-            if hasattr(observation, "zk_proof") and observation.zk_proof:  # pragma: no cover
-                obs_dict["zk_proof"] = observation.zk_proof.model_dump()
 
             await self.broker.push(obs_dict)
 
@@ -356,17 +346,17 @@ class ActuatorDaemon:
             else:
                 logger.warning(f"No active sandbox tracked for {event_id} to teardown")
 
-            observation = ObservationEvent(
-                event_id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                type="observation",
+            observation = {
+                "event_id": str(uuid.uuid4()),
+                "timestamp": time.time(),
+                "type": "observation",
                 # The FRD: If True, eradicate safely. It doesn't explicitly specify the
                 # Observation payload for eradication, but following conventions,
                 # we return a pure state JSON primitive.
-                payload={"eradicated": True},
-                triggering_invocation_id=event_id,
-            )
-            await self.broker.push(observation.model_dump())
+                "payload": {"eradicated": True},
+                "triggering_invocation_id": event_id,
+            }
+            await self.broker.push(observation)
             raise  # Re-raise CancelledError to properly terminate the task
 
         except Exception:
@@ -377,15 +367,15 @@ class ActuatorDaemon:
 
             payload = {"traceback": tb}
 
-            observation = ObservationEvent(
-                event_id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                type="observation",
-                payload=payload,
-                triggering_invocation_id=event_id,
-            )
+            observation = {
+                "event_id": str(uuid.uuid4()),
+                "timestamp": time.time(),
+                "type": "observation",
+                "payload": payload,
+                "triggering_invocation_id": event_id,
+            }
             logger.error(f"Tool {tool_name} crashed: {tb}")
-            await self.broker.push(observation.model_dump())
+            await self.broker.push(observation)
         finally:
             self.active_tasks_count -= 1
             self.active_tasks.pop(event_id, None)
@@ -403,7 +393,6 @@ class ActuatorDaemon:
 
         try:
             params = raw_payload.get("params", {})
-            intent = LatentSchemaInferenceIntent(**params)
 
             # Spin up the sandbox if partitions are provided
             sandbox = None
@@ -411,37 +400,39 @@ class ActuatorDaemon:
             if partitions_data:
                 from coreason_actuator.sandbox import SandboxProviderFactory
 
-                partition = EphemeralNamespacePartitionState(**partitions_data[0])
-                sandbox = SandboxProviderFactory.create(partition)
+                partition_data = partitions_data[0]
+                partition = types.SimpleNamespace(**partition_data)
+                sandbox = SandboxProviderFactory.create(partition)  # type: ignore[arg-type]
                 sandbox.provision(partition)
                 if request_id:
                     self.active_sandboxes[str(request_id)] = sandbox
 
             result = {}
             if sandbox:
-                bytecode = intent.target_buffer_id.encode("utf-8")
-                if getattr(intent, "formal_grammar_payload", None):
-                    bytecode = intent.formal_grammar_payload.encode("utf-8")  # type: ignore[attr-defined]
+                bytecode = params.get("target_buffer_id", "").encode("utf-8")
+                if params.get("formal_grammar_payload"):
+                    bytecode = params.get("formal_grammar_payload", "").encode("utf-8")
                 result = await sandbox.execute(bytecode)
 
-            import time
-
-            observation = ObservationEvent(
-                event_id=str(uuid.uuid4()),
-                triggering_invocation_id=request_id,
-                timestamp=time.time(),
-                type="observation",
-                payload={"research_result": result},
-            )
-            await self.broker.push(observation.model_dump())
+            observation = {
+                "event_id": str(uuid.uuid4()),
+                "triggering_invocation_id": request_id,
+                "timestamp": time.time(),
+                "type": "observation",
+                "payload": {"research_result": result},
+            }
+            await self.broker.push(observation)
         except Exception as e:
             logger.error(f"Execution failed for research {request_id}: {e}")
-            error_response = JSONRPCErrorResponseState(
-                jsonrpc="2.0",
-                id=request_id,
-                error=JSONRPCErrorState(code=-32000, message=str(e)),
-            )
-            await self.broker.push(error_response.model_dump())
+            error_response = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32000,
+                    "message": str(e),
+                },
+            }
+            await self.broker.push(error_response)
         finally:
             self.active_tasks_count -= 1
             if request_id:
