@@ -55,3 +55,55 @@ class LocalToolInvocation(BaseModel):
     def from_payload(cls, payload: dict[str, Any]) -> "LocalToolInvocation":
         """Factory method to parse a generic dictionary payload into the DTO."""
         return cls.model_validate(payload)
+
+
+class InternalPartitionDTO(BaseModel):
+    """Internal DTO representing EphemeralNamespacePartitionState routing params."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    partition_id: str
+    execution_runtime: str
+    max_vram_mb: int = 512
+    max_ttl_seconds: int = 300
+    allow_network_egress: bool = False
+
+
+class InternalStateHydrationDTO(BaseModel):
+    """Internal DTO representing StateHydrationManifest."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    session_state: dict[str, Any] | None = None
+    partition_state: InternalPartitionDTO | None = None
+
+
+class InternalIntentDTO(BaseModel):
+    """Internal DTO representing ToolInvocationEvent and routing params."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    jsonrpc: str = "2.0"
+    id: Any = None
+    method: str = ""
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class InternalJSONRPCErrorState(BaseModel):
+    """Internal DTO representing a JSONRPCErrorState."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    code: int
+    message: str
+    data: dict[str, Any] | None = None
+
+
+class InternalJSONRPCErrorResponseState(BaseModel):
+    """Internal DTO representing a JSONRPCErrorResponseState."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    jsonrpc: str = "2.0"
+    id: Any = None
+    error: InternalJSONRPCErrorState

@@ -48,12 +48,12 @@ class MockBroker:
 class MockValidator:
     def __init__(self, should_fail: bool = False) -> None:
         self.should_fail = should_fail
-        from coreason_manifest.spec.ontology import JSONRPCErrorResponseState, JSONRPCErrorState
+        from coreason_actuator.adapters.dto import InternalJSONRPCErrorResponseState, InternalJSONRPCErrorState
 
-        self.error_response = JSONRPCErrorResponseState(
+        self.error_response = InternalJSONRPCErrorResponseState(
             jsonrpc="2.0",
             id=123,
-            error=JSONRPCErrorState(code=400, message="Mock validation failure"),
+            error=InternalJSONRPCErrorState(code=400, message="Mock validation failure"),
         )
 
     def validate_intent(self, payload: dict[str, Any]) -> Any:
@@ -62,82 +62,43 @@ class MockValidator:
         if self.should_fail:
             return self.error_response
 
-        # Just return a dummy event
-        # Just return a proper mock event
-        from coreason_manifest.spec.ontology import (
-            AgentAttestationReceipt,
-            StateHydrationManifest,
-            ZeroKnowledgeReceipt,
-        )
+        class MockSession:
+            def __init__(self) -> None:
+                self.session_id = "sess_123"
+                self.allowed_vault_keys = ["oauth2:github", "mtls:internal"]
 
-        intent = ToolInvocationEvent(
-            event_id="test_event_123",
-            timestamp=12345.6,
-            tool_name="test_tool",
-            parameters={},
-            zk_proof=ZeroKnowledgeReceipt.model_construct(
-                proof_protocol="zk-STARK",
-                public_inputs_hash="mock",
-                verifier_key_id="mock",
-                cryptographic_blob="{'mock': 'true'}",
-            ),
-            agent_attestation=AgentAttestationReceipt.model_validate(
-                {
-                    "training_lineage_hash": "a" * 64,
-                    "developer_signature": "b",
-                    "capability_merkle_root": "c" * 64,
-                    "credential_presentations": [],
-                }
-            ),
-        )
+        class MockPartition:
+            def __init__(self) -> None:
+                self.partition_id = "test_partition_1"
+                self.execution_runtime = "docker"
+                self.max_vram_mb = 512
+                self.max_ttl_seconds = 300
+                self.allow_network_egress = False
 
-        # Simulate state_hydration bound correctly
-        # Since we just found out session_state does not exist on StateHydrationManifest
-        # we have to attach it if we want to mimic the logic, or we inject a custom object.
-        # Wait, the FRD says "FR-2.2 Stateful Sandbox Cache ... active sandboxes bound to specific session_id tags".
-        # Let's mock a simpler object that acts as StateHydrationManifest but has session_state attached
-        # OR actually instantiate StateHydrationManifest and set the attribute dynamically just like
-        # we do for ToolInvocationEvent!
+        class MockHydration:
+            def __init__(self) -> None:
+                self.session_state = MockSession()
+                self.partition_state = MockPartition()
 
-        state_hydration = StateHydrationManifest.model_validate(
-            {
-                "epistemic_coordinate": "test_coordinate",
-                "crystallized_ledger_cids": [],
-                "working_context_variables": {},
-                "max_retained_tokens": 1000,
-            }
-        )
-
-        from coreason_manifest.spec.ontology import SecureSubSessionState
-
-        session_state = SecureSubSessionState.model_validate(
-            {
-                "session_id": "sess_123",
-                "max_ttl_seconds": 300,
-                "allowed_vault_keys": ["oauth2:github", "mtls:internal"],
-                "description": "Test session",
-            }
-        )
-
-        from coreason_manifest.spec.ontology import EphemeralNamespacePartitionState
-
-        partition_state = EphemeralNamespacePartitionState.model_validate(
-            {
-                "partition_id": "part_123",
-                "execution_runtime": "wasm32-wasi",
-                "allow_network_egress": True,
-                "authorized_bytecode_hashes": ["a" * 64],
-                "max_ttl_seconds": 300,
-                "max_vram_mb": 1024,
-            }
-        )
-
-        # FRD implies session_state and partition_state are available on state_hydration
-        object.__setattr__(state_hydration, "session_state", session_state)
-        object.__setattr__(state_hydration, "partition_state", partition_state)
-
-        object.__setattr__(intent, "state_hydration", state_hydration)
-        return intent
+        return {
+            "event_id": "test_event_123",
+            "timestamp": 12345.6,
+            "tool_name": "test_tool",
+            "parameters": {},
+            "zk_proof": {
+                "proof_protocol": "zk-STARK",
+                "public_inputs_hash": "mock",
+                "verifier_key_id": "mock",
+                "cryptographic_blob": "{'mock': 'true'}",
+            },
+            "agent_attestation": {
+                "training_lineage_hash": "a" * 64,
+                "developer_signature": "b",
+                "capability_merkle_root": "c" * 64,
+                "credential_presentations": [],
+            },
+            "state_hydration": MockHydration(),
+        }
 
 
 class MockRegistry:

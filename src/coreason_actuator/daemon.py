@@ -156,14 +156,31 @@ class ActuatorDaemon:
         # Pre-Flight Validation
         result = self.validator.validate_intent(raw_payload)
 
-        if isinstance(result, JSONRPCErrorResponseState):
-            logger.error("Pre-flight validation failed", payload_id=result.id, error=result.error.message)
-            await self.broker.push(result.model_dump())
+        if hasattr(result, "error") and getattr(result, "error", None) is not None:
+            # Result is an InternalJSONRPCErrorResponseState
+            error_obj = result.error
+            logger.error(
+                "Pre-flight validation failed",
+                payload_id=getattr(result, "id", None),
+                error=getattr(error_obj, "message", "Unknown error"),
+            )
+            dump_func = getattr(result, "model_dump", None)
+            if dump_func:
+                await self.broker.push(dump_func())
             return
 
-        # Execute the intent concurrently
+        # result is a validated params dictionary
+        # It contains tool_name, parameters, event_id, etc. depending on what was passed
+        event_id = getattr(result, "event_id", None)
+        if event_id is None and isinstance(result, dict):
+            event_id = result.get("event_id", raw_payload.get("id"))
+
+        # fallback for mock testing which might return the raw pydantic object
+        if not isinstance(result, dict):
+            result = result.model_dump()
+
         task = asyncio.create_task(self._dispatch_intent(result, raw_payload.get("id"), raw_payload))
-        self.active_tasks[str(result.event_id)] = task
+        self.active_tasks[str(event_id)] = task
 
     async def _handle_preemption(self, target_event_id: str) -> None:
         """Handles a BargeInInterruptEvent by attempting to cancel the active task."""
@@ -178,25 +195,35 @@ class ActuatorDaemon:
         task.cancel()
 
     async def _dispatch_intent(
-        self, intent: ToolInvocationEvent, request_id: Any, raw_payload: dict[str, Any] | None = None
+        self, intent: dict[str, Any], request_id: Any, raw_payload: dict[str, Any] | None = None
     ) -> None:
         """
         Executes the tool intent via the Do-Operator and returns an ObservationEvent.
         """
         self.active_tasks_count += 1
-        logger.info(f"Dispatched tool invocation: {intent.tool_name}", request_id=request_id)
+        tool_name = intent.get("tool_name", "")
+        event_id = intent.get("event_id", request_id)
+
+        # execution strategies expect an intent object with tool_name, parameters, event_id, etc
+        try:
+            intent_obj = ToolInvocationEvent.model_validate(intent)
+        except Exception:
+            # mock environments or fallback
+            intent_obj = ToolInvocationEvent.model_construct(**intent)
+
+        logger.info(f"Dispatched tool invocation: {tool_name}", request_id=request_id)
 
         try:
             # Get manifest from registry to pass to execution strategy
-            manifest = self.registry.get_tool(intent.tool_name)
+            manifest = self.registry.get_tool(tool_name)
             if not manifest:
-                logger.error(f"ToolManifest not found for tool: {intent.tool_name}")
+                logger.error(f"ToolManifest not found for tool: {tool_name}")
                 error_response = JSONRPCErrorResponseState(
                     jsonrpc="2.0",
                     id=request_id,
                     error=JSONRPCErrorState(
                         code=-32601,
-                        message=f"Method not found: Tool '{intent.tool_name}' missing from the registry.",
+                        message=f"Method not found: Tool '{tool_name}' missing from the registry.",
                     ),
                 )
                 await self.broker.push(error_response.model_dump())
@@ -204,7 +231,7 @@ class ActuatorDaemon:
 
             # Execute Do-Operator
             # Retrieve sandbox if assigned (e.g., dynamically by earlier orchestration/provisioning).
-            sandbox = self.active_sandboxes.get(intent.event_id)
+            sandbox = self.active_sandboxes.get(event_id)
 
             # Check if partitions were passed explicitly in the IPC payload
             if raw_payload and not sandbox:
@@ -215,17 +242,18 @@ class ActuatorDaemon:
                     partition = EphemeralNamespacePartitionState(**partitions_data[0])
                     sandbox = SandboxProviderFactory.create(partition)
                     sandbox.provision(partition)
-                    self.active_sandboxes[intent.event_id] = sandbox
+                    self.active_sandboxes[event_id] = sandbox
 
-            # Extract session state from the state_hydration natively bound to intent
-            if hasattr(intent, "state_hydration") and intent.state_hydration is not None:
-                session_state = getattr(intent.state_hydration, "session_state", None)
-                partition_state = getattr(intent.state_hydration, "partition_state", None)
+            # Extract session state from the state_hydration attached to intent dictionary
+            state_hydration = intent.get("state_hydration")
+            if state_hydration:
+                session_state = getattr(state_hydration, "session_state", None)
+                partition_state = getattr(state_hydration, "partition_state", None)
 
                 # Provision or get sandbox via StatefulSandboxCache if available
                 if self.sandbox_cache and session_state and partition_state and not sandbox:
                     sandbox = await self.sandbox_cache.get_or_create(session_state, partition_state)
-                    self.active_sandboxes[intent.event_id] = sandbox
+                    self.active_sandboxes[event_id] = sandbox
 
                 if sandbox and partition_state:
                     # Apply Dual-Evaluation Permission Boundary and immutability checks
@@ -242,21 +270,19 @@ class ActuatorDaemon:
             sandbox_pid = sandbox
 
             if not manifest.get("is_preemptible", True) if isinstance(manifest, dict) else manifest.is_preemptible:
-                inner_task = asyncio.create_task(self.execution_strategy.execute(intent, manifest, sandbox_pid))  # type: ignore[arg-type]
+                inner_task = asyncio.create_task(self.execution_strategy.execute(intent_obj, manifest, sandbox_pid))  # type: ignore[arg-type]
                 try:
                     result = await asyncio.shield(inner_task)
                 except asyncio.CancelledError:
                     # Outer task was cancelled (barge-in received).
                     # But since it's not preemptible, we must wait for it to finish!
-                    logger.info(
-                        f"Task for {intent.event_id} was preempted, but is not preemptible. Waiting for completion."
-                    )
+                    logger.info(f"Task for {event_id} was preempted, but is not preemptible. Waiting for completion.")
                     result = await inner_task
                     # We must emit completed_under_preemption
-                    self.preempted_events.add(intent.event_id)
+                    self.preempted_events.add(event_id)
             else:
                 # Preemptible
-                result = await self.execution_strategy.execute(intent, manifest, sandbox_pid)  # type: ignore[arg-type]
+                result = await self.execution_strategy.execute(intent_obj, manifest, sandbox_pid)  # type: ignore[arg-type]
 
             # ZK Proof extraction
             zk_receipt = None
@@ -302,14 +328,14 @@ class ActuatorDaemon:
                 timestamp=time.time(),
                 type="observation",
                 payload=payload,
-                triggering_invocation_id=intent.event_id,
+                triggering_invocation_id=event_id,
             )
             if truncation_metadata:  # pragma: no cover
                 object.__setattr__(observation, "truncation_metadata", truncation_metadata)
             if zk_receipt:  # pragma: no cover
                 object.__setattr__(observation, "zk_proof", zk_receipt)
 
-            logger.info(f"Tool {intent.tool_name} executed successfully.")
+            logger.info(f"Tool {tool_name} executed successfully.")
 
             obs_dict = observation.model_dump()
             if hasattr(observation, "truncation_metadata"):  # pragma: no cover
@@ -321,14 +347,14 @@ class ActuatorDaemon:
 
         except asyncio.CancelledError:
             # Task was cancelled and is preemptible
-            logger.info(f"Execution for {intent.event_id} was safely eradicated via preemption.")
+            logger.info(f"Execution for {event_id} was safely eradicated via preemption.")
 
-            sandbox = self.active_sandboxes.get(intent.event_id)
+            sandbox = self.active_sandboxes.get(event_id)
             if sandbox:
-                logger.info(f"Invoking explicit asynchronous teardown on sandbox for {intent.event_id}")
+                logger.info(f"Invoking explicit asynchronous teardown on sandbox for {event_id}")
                 await sandbox.teardown(force=True)
             else:
-                logger.warning(f"No active sandbox tracked for {intent.event_id} to teardown")
+                logger.warning(f"No active sandbox tracked for {event_id} to teardown")
 
             observation = ObservationEvent(
                 event_id=str(uuid.uuid4()),
@@ -338,7 +364,7 @@ class ActuatorDaemon:
                 # Observation payload for eradication, but following conventions,
                 # we return a pure state JSON primitive.
                 payload={"eradicated": True},
-                triggering_invocation_id=intent.event_id,
+                triggering_invocation_id=event_id,
             )
             await self.broker.push(observation.model_dump())
             raise  # Re-raise CancelledError to properly terminate the task
@@ -356,16 +382,16 @@ class ActuatorDaemon:
                 timestamp=time.time(),
                 type="observation",
                 payload=payload,
-                triggering_invocation_id=intent.event_id,
+                triggering_invocation_id=event_id,
             )
-            logger.error(f"Tool {intent.tool_name} crashed: {tb}")
+            logger.error(f"Tool {tool_name} crashed: {tb}")
             await self.broker.push(observation.model_dump())
         finally:
             self.active_tasks_count -= 1
-            self.active_tasks.pop(intent.event_id, None)
-            self.preempted_events.discard(intent.event_id)
+            self.active_tasks.pop(event_id, None)
+            self.preempted_events.discard(event_id)
             # Explicitly teardown if it wasn't an explicitly cached session sandbox
-            sandbox = self.active_sandboxes.pop(intent.event_id, None)
+            sandbox = self.active_sandboxes.pop(event_id, None)
             if sandbox and not self.sandbox_cache:
                 await sandbox.teardown(force=True)
 

@@ -10,15 +10,14 @@
 
 from typing import Any
 
-from coreason_manifest.spec.ontology import (
-    BoundedJSONRPCIntent,
-    JSONRPCErrorResponseState,
-    JSONRPCErrorState,
-    StateHydrationManifest,
-    ToolInvocationEvent,
-)
 from pydantic import ValidationError
 
+from coreason_actuator.adapters.dto import (
+    InternalIntentDTO,
+    InternalJSONRPCErrorResponseState,
+    InternalJSONRPCErrorState,
+    InternalStateHydrationDTO,
+)
 from coreason_actuator.interfaces import ActionSpaceRegistryProtocol, CryptographicVerifierProtocol
 
 
@@ -33,112 +32,99 @@ class IPCValidator:
         self.registry = registry
         self.verifier = verifier
 
-    def validate_intent(self, raw_payload: dict[str, Any]) -> ToolInvocationEvent | JSONRPCErrorResponseState:
+    def validate_intent(self, raw_payload: dict[str, Any]) -> dict[str, Any] | InternalJSONRPCErrorResponseState:
         """
-        Parses and strictly validates the raw IPC payload.
+        Parses and validates the raw IPC payload.
 
         Args:
             raw_payload: The raw dictionary from the IPC broker.
 
         Returns:
-            The extracted ToolInvocationEvent if valid, or a JSONRPCErrorResponseState.
+            The extracted payload dictionary if valid, or a InternalJSONRPCErrorResponseState.
         """
         try:
-            intent = BoundedJSONRPCIntent.model_validate(raw_payload)
+            intent = InternalIntentDTO.model_validate(raw_payload)
         except (ValidationError, TypeError) as e:
             err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
-            return JSONRPCErrorResponseState.model_construct(
+            return InternalJSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=raw_payload.get("id"),
-                error=JSONRPCErrorState(
+                error=InternalJSONRPCErrorState(
                     code=-32700,
                     message="Parse error: Invalid BoundedJSONRPCIntent payload.",
                     data={"details": str(err_details)},
                 ),
             )
 
-        # Extract ToolInvocationEvent from params
-        params = intent.params or {}
+        # Extract params
+        params = intent.params.copy() if intent.params else {}
 
-        # Extract and validate StateHydrationManifest
-        state_hydration_dict = params.pop("state_hydration", None)
-        if state_hydration_dict is None:
-            return JSONRPCErrorResponseState.model_construct(
+        # The protocol method expects BoundedJSONRPCIntent to map method to tool_name
+        tool_name = intent.method or params.get("tool_name")
+        if not tool_name:
+            return InternalJSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,
-                error=JSONRPCErrorState(
+                error=InternalJSONRPCErrorState(
+                    code=-32602,
+                    message="Invalid params: Missing tool_name in intent.",
+                ),
+            )
+
+        # Ensure tool_name is in params for downstream
+        params["tool_name"] = tool_name
+
+        # Extract and validate StateHydrationManifest
+        state_hydration_dict = params.get("state_hydration", None)
+        if state_hydration_dict is None:
+            return InternalJSONRPCErrorResponseState.model_construct(
+                jsonrpc="2.0",
+                id=intent.id,
+                error=InternalJSONRPCErrorState(
                     code=-32602,
                     message="Invalid params: Payload is missing strictly required state_hydration.",
                 ),
             )
 
         try:
-            state_hydration_manifest = StateHydrationManifest.model_validate(state_hydration_dict)
+            state_hydration_manifest = InternalStateHydrationDTO.model_validate(state_hydration_dict)
+            params["state_hydration"] = state_hydration_manifest
         except (ValidationError, TypeError) as e:
             err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
-            return JSONRPCErrorResponseState.model_construct(
+            return InternalJSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,
-                error=JSONRPCErrorState(
+                error=InternalJSONRPCErrorState(
                     code=-32602,
                     message="Invalid params: Payload does not conform to StateHydrationManifest bounds.",
                     data={"details": str(err_details)},
                 ),
             )
 
-        try:
-            tool_invocation = ToolInvocationEvent.model_validate(params)
-        except (ValidationError, TypeError, ValueError) as e:
-            err_details = e.errors() if hasattr(e, "errors") else [{"msg": str(e)}]
-            return JSONRPCErrorResponseState.model_construct(
-                jsonrpc="2.0",
-                id=intent.id,
-                error=JSONRPCErrorState(
-                    code=-32602,
-                    message="Invalid params: Payload does not conform to ToolInvocationEvent bounds.",
-                    data={"details": str(err_details)},
-                ),
-            )
-
-        # Natively bind the state hydration manifest to the tool invocation
-        object.__setattr__(tool_invocation, "state_hydration", state_hydration_manifest)
-
         # Mathematical verification of ZK proof and agent attestation
-        from coreason_manifest.spec.ontology import TamperFaultEvent
-
         try:
-            self.verifier.verify(tool_invocation.model_dump())
-        except TamperFaultEvent as e:
-            return JSONRPCErrorResponseState.model_construct(
+            self.verifier.verify(params)
+        except Exception as e:
+            # We trap broad Exception since we removed coreason_manifest TamperFaultEvent dependency
+            return InternalJSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,
-                error=JSONRPCErrorState(
+                error=InternalJSONRPCErrorState(
                     code=403,
                     message=f"Cryptographic verification failed: {e!s}",
                 ),
             )
 
         # Topological Registry Verification
-        tool_name = getattr(tool_invocation, "tool_name", None)
-        if tool_name is None:
-            return JSONRPCErrorResponseState.model_construct(
-                jsonrpc="2.0",
-                id=intent.id,
-                error=JSONRPCErrorState(
-                    code=-32602,
-                    message="Invalid params: Missing tool_name in ToolInvocationEvent.",
-                ),
-            )
-
         tool_manifest = self.registry.get_tool(tool_name)
         if tool_manifest is None:
-            return JSONRPCErrorResponseState.model_construct(
+            return InternalJSONRPCErrorResponseState.model_construct(
                 jsonrpc="2.0",
                 id=intent.id,
-                error=JSONRPCErrorState(
+                error=InternalJSONRPCErrorState(
                     code=-32601,
                     message=f"Method not found: Tool '{tool_name}' missing from the registry.",
                 ),
             )
 
-        return tool_invocation
+        return params

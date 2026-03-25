@@ -36,7 +36,7 @@ from coreason_actuator.utils.logger import logger
 class ExecutionStrategyProtocol(Protocol):
     """Protocol defining the interface for execution strategies."""
 
-    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+    async def execute(self, intent: dict[str, Any], manifest: dict[str, Any], sandbox_pid: Any) -> Any:
         """Executes the specific protocol logic."""
         ...
 
@@ -119,7 +119,7 @@ class NativeExecutionStrategy:
         self.registry = registry
         self.lock_manager = lock_manager
 
-    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+    async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
         """
         Executes the native python function.
 
@@ -226,7 +226,7 @@ class MCPClientStrategy:
         self.registry = registry
         self.transport = transport
 
-    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+    async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
         """
         Executes the MCP protocol dispatch.
 
@@ -300,7 +300,7 @@ class KinematicExecutionStrategy:
         self.browser = browser
         self.tensor_storage = tensor_storage
 
-    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+    async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
         """
         Executes the kinematic interaction using purely atomic locators.
 
@@ -387,8 +387,6 @@ def _run_sync_execution(tool_name: str, parameters: dict[str, Any]) -> Any:  # p
         AgentAttestationReceipt,
         PermissionBoundaryPolicy,
         SideEffectProfile,
-        ToolInvocationEvent,
-        ToolManifest,
         ZeroKnowledgeReceipt,
     )
 
@@ -445,7 +443,7 @@ class BackgroundPollingStrategy:
         self.execution_strategy = execution_strategy
         self.broker = broker
 
-    async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
+    async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
         sla = manifest.sla
         max_time_ms = sla.max_execution_time_ms if sla else None
 
@@ -478,8 +476,8 @@ class BackgroundPollingStrategy:
 
     async def _background_execute(
         self,
-        intent: ToolInvocationEvent,
-        manifest: ToolManifest,  # noqa: ARG002
+        intent: Any,
+        manifest: Any,  # noqa: ARG002
         sandbox_pid: Any,  # noqa: ARG002
         job_id: str,
     ) -> None:
