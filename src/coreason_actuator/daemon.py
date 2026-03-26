@@ -254,8 +254,16 @@ class ActuatorDaemon:
 
                 if sandbox and partition_state:
                     # Apply Dual-Evaluation Permission Boundary and immutability checks
-                    verify_network_access(manifest, partition_state, sandbox)  # type: ignore[arg-type]
-                    enforce_sandbox_immutability(manifest, sandbox)  # type: ignore[arg-type]
+                    manifest_dict = getattr(manifest, "model_dump", lambda: manifest)()
+                    partition_dict = getattr(
+                        partition_state, "model_dump", lambda: getattr(partition_state, "__dict__", partition_state)
+                    )()
+                    verify_network_access(
+                        manifest_dict,
+                        partition_dict,  # type: ignore[arg-type]
+                        sandbox,
+                    )  # type: ignore[arg-type]
+                    enforce_sandbox_immutability(manifest_dict, sandbox)  # type: ignore[arg-type]
 
                 # Based on FR-2.3, if allowed_vault_keys is present, unseal secrets and inject into sandbox
                 if session_state and getattr(session_state, "allowed_vault_keys", None) and self.vault:

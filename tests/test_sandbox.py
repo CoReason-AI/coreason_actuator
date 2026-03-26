@@ -94,19 +94,25 @@ def create_partition_state(runtime: Any) -> EphemeralNamespacePartitionState:
 
 def test_sandbox_factory_wasm() -> None:
     state = create_partition_state("wasm32-wasi")
-    provider = SandboxProviderFactory.create(state)
+    provider = SandboxProviderFactory.create(
+        state.model_dump() if hasattr(state, "model_dump") else state.__dict__ if hasattr(state, "__dict__") else state
+    )
     assert isinstance(provider, WasmSandboxProvider)
 
 
 def test_sandbox_factory_riscv() -> None:
     state = create_partition_state("riscv32-zkvm")
-    provider = SandboxProviderFactory.create(state)
+    provider = SandboxProviderFactory.create(
+        state.model_dump() if hasattr(state, "model_dump") else state.__dict__ if hasattr(state, "__dict__") else state
+    )
     assert isinstance(provider, RiscvZkvmSandboxProvider)
 
 
 def test_sandbox_factory_bpf() -> None:
     state = create_partition_state("bpf")
-    provider = SandboxProviderFactory.create(state)
+    provider = SandboxProviderFactory.create(
+        state.model_dump() if hasattr(state, "model_dump") else state.__dict__ if hasattr(state, "__dict__") else state
+    )
     assert isinstance(provider, BpfSandboxProvider)
 
 
@@ -116,14 +122,22 @@ def test_sandbox_factory_invalid() -> None:
     state = create_partition_state("wasm32-wasi")
     object.__setattr__(state, "execution_runtime", "invalid_runtime")
     with pytest.raises(ValueError, match="Legacy containerization strictly prohibited"):
-        SandboxProviderFactory.create(state)
+        SandboxProviderFactory.create(
+            state.model_dump()
+            if hasattr(state, "model_dump")
+            else state.__dict__
+            if hasattr(state, "__dict__")
+            else state
+        )
 
 
 @pytest.mark.asyncio
 async def test_wasm_provider_methods() -> None:
     provider = WasmSandboxProvider()
     state = create_partition_state("wasm32-wasi")
-    provider.provision(state)
+    provider.provision(
+        state.model_dump() if hasattr(state, "model_dump") else state.__dict__ if hasattr(state, "__dict__") else state
+    )
     assert provider.partition_id == "test_part"
 
     provider.apply_network_egress_rules(["coreason.ai"])
@@ -152,7 +166,9 @@ async def test_wasm_provider_methods() -> None:
 async def test_riscv_provider_methods() -> None:
     provider = RiscvZkvmSandboxProvider()
     state = create_partition_state("riscv32-zkvm")
-    provider.provision(state)
+    provider.provision(
+        state.model_dump() if hasattr(state, "model_dump") else state.__dict__ if hasattr(state, "__dict__") else state
+    )
     assert provider.partition_id == "test_part"
 
     provider.apply_network_egress_rules(["coreason.ai"])
@@ -199,7 +215,9 @@ async def test_riscv_provider_methods() -> None:
 async def test_bpf_provider_methods() -> None:
     provider = BpfSandboxProvider()
     state = create_partition_state("bpf")
-    provider.provision(state)
+    provider.provision(
+        state.model_dump() if hasattr(state, "model_dump") else state.__dict__ if hasattr(state, "__dict__") else state
+    )
     assert provider.partition_id == "test_part"
 
     provider.apply_network_egress_rules(["coreason.ai"])
@@ -251,10 +269,16 @@ async def test_stateful_sandbox_cache_warm_start() -> None:
     partition_state = create_partition_state("wasm32-wasi")
 
     # Cold start
-    provider1 = await cache.get_or_create(session_state, partition_state)
+    provider1 = await cache.get_or_create(
+        session_state.model_dump() if hasattr(session_state, "model_dump") else session_state,
+        partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+    )
 
     # Warm start
-    provider2 = await cache.get_or_create(session_state, partition_state)
+    provider2 = await cache.get_or_create(
+        session_state.model_dump() if hasattr(session_state, "model_dump") else session_state,
+        partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+    )
 
     assert provider1 is provider2
     assert len(cache._cache) == 1
@@ -271,15 +295,24 @@ async def test_stateful_sandbox_cache_eviction() -> None:
 
     from unittest.mock import AsyncMock
 
-    p1 = await cache.get_or_create(session1, partition_state)
+    p1 = await cache.get_or_create(
+        session1.model_dump() if hasattr(session1, "model_dump") else session1,
+        partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+    )
     p1.teardown = AsyncMock()  # type: ignore
 
-    _ = await cache.get_or_create(session2, partition_state)
+    _ = await cache.get_or_create(
+        session2.model_dump() if hasattr(session2, "model_dump") else session2,
+        partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+    )
 
     assert len(cache._cache) == 2
 
     # Adding third should evict first (s1)
-    _ = await cache.get_or_create(session3, partition_state)
+    _ = await cache.get_or_create(
+        session3.model_dump() if hasattr(session3, "model_dump") else session3,
+        partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+    )
 
     assert len(cache._cache) == 2
     assert "s1" not in cache._cache
@@ -302,7 +335,10 @@ async def test_stateful_sandbox_cache_teardown_all() -> None:
     session1 = SecureSubSessionState(session_id="s1", allowed_vault_keys=[], max_ttl_seconds=300, description="Test")
     from unittest.mock import AsyncMock
 
-    p1 = await cache.get_or_create(session1, partition_state)
+    p1 = await cache.get_or_create(
+        session1.model_dump() if hasattr(session1, "model_dump") else session1,
+        partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+    )
     p1.teardown = AsyncMock()  # type: ignore
 
     await cache.teardown_all()
@@ -343,7 +379,13 @@ def test_verify_network_access_both_true() -> None:
     # Need to override allow_network_egress
     object.__setattr__(partition_state, "allow_network_egress", True)
 
-    assert verify_network_access(manifest, partition_state) is True
+    assert (
+        verify_network_access(
+            manifest.model_dump() if hasattr(manifest, "model_dump") else manifest.__dict__,
+            partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+        )
+        is True
+    )
 
 
 def test_verify_network_access_with_provider_rules_applied() -> None:
@@ -378,7 +420,14 @@ def test_verify_network_access_with_provider_rules_applied() -> None:
 
     provider = MockProvider()
 
-    assert verify_network_access(manifest, partition_state, provider) is True
+    assert (
+        verify_network_access(
+            manifest.model_dump() if hasattr(manifest, "model_dump") else manifest.__dict__,
+            partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+            provider,
+        )
+        is True
+    )
     assert provider.applied_domains == ["coreason.ai", "example.com"]
 
 
@@ -387,7 +436,13 @@ def test_verify_network_access_both_false() -> None:
     partition_state = create_partition_state("wasm32-wasi")
     object.__setattr__(partition_state, "allow_network_egress", False)
 
-    assert verify_network_access(manifest, partition_state) is False
+    assert (
+        verify_network_access(
+            manifest.model_dump() if hasattr(manifest, "model_dump") else manifest.__dict__,
+            partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+        )
+        is False
+    )
 
 
 def test_verify_network_access_tool_false_sandbox_true() -> None:
@@ -395,7 +450,13 @@ def test_verify_network_access_tool_false_sandbox_true() -> None:
     partition_state = create_partition_state("wasm32-wasi")
     object.__setattr__(partition_state, "allow_network_egress", True)
 
-    assert verify_network_access(manifest, partition_state) is False
+    assert (
+        verify_network_access(
+            manifest.model_dump() if hasattr(manifest, "model_dump") else manifest.__dict__,
+            partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+        )
+        is False
+    )
 
 
 def test_verify_network_access_conflict_raises() -> None:
@@ -404,7 +465,10 @@ def test_verify_network_access_conflict_raises() -> None:
     object.__setattr__(partition_state, "allow_network_egress", False)
 
     with pytest.raises(PermissionError, match="Dual-Evaluation Permission Boundary conflict"):
-        verify_network_access(manifest, partition_state)
+        verify_network_access(
+            manifest.model_dump() if hasattr(manifest, "model_dump") else manifest.__dict__,
+            partition_state.model_dump() if hasattr(partition_state, "model_dump") else partition_state.__dict__,
+        )
 
 
 def test_enforce_sandbox_immutability() -> None:
@@ -434,7 +498,11 @@ def test_enforce_sandbox_immutability() -> None:
 
     provider = MockProvider()
 
-    enforce_sandbox_immutability(manifest, provider, additional_exemptions=["/extra"])
+    enforce_sandbox_immutability(
+        manifest.model_dump() if hasattr(manifest, "model_dump") else manifest.__dict__,
+        provider,
+        additional_exemptions=["/extra"],
+    )
 
     assert provider.exemptions == ["/dev/shm", "/run/secrets", "/extra"]  # noqa: S108
 
@@ -467,6 +535,9 @@ def test_enforce_sandbox_immutability_not_forbidden() -> None:
 
     provider = MockProvider()
 
-    enforce_sandbox_immutability(manifest, provider)
+    enforce_sandbox_immutability(
+        manifest.model_dump() if hasattr(manifest, "model_dump") else manifest.__dict__,
+        getattr(provider, "model_dump", lambda: provider)() if hasattr(provider, "model_dump") else provider,
+    )
 
     assert provider.exemptions is None

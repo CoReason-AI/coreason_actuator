@@ -433,7 +433,9 @@ class BackgroundPollingStrategy:
 
     async def execute(self, intent: dict[str, Any], manifest: dict[str, Any], sandbox_pid: Any) -> Any:
         sla = manifest.get("sla", {})
-        max_time_ms = sla.get("max_execution_time_ms")
+        max_time_ms = (
+            sla.get("max_execution_time_ms") if hasattr(sla, "get") else getattr(sla, "max_execution_time_ms", None)
+        )
         tool_name = intent.get("tool_name", "")
 
         if max_time_ms is None or max_time_ms < 30000:
