@@ -375,7 +375,7 @@ class KinematicExecutionStrategy:
         }
 
 
-def _run_sync_execution(tool_name: str, parameters: dict[str, Any]) -> Any:  # pragma: no cover
+def _run_sync_execution(intent_payload: dict[str, Any], manifest_payload: dict[str, Any]) -> Any:  # pragma: no cover
     """Helper to bridge async registry inside a synchronous ProcessPool"""
     import asyncio  # pragma: no cover
 
@@ -387,34 +387,8 @@ def _run_sync_execution(tool_name: str, parameters: dict[str, Any]) -> Any:  # p
     lock_manager = AsyncLockManager()  # pragma: no cover
     strategy = NativeExecutionStrategy(registry=registry, lock_manager=lock_manager)  # pragma: no cover
 
-    intent = {
-        "event_id": "0",
-        "timestamp": 0.0,
-        "tool_name": tool_name,
-        "parameters": parameters,
-        "zk_proof": {
-            "proof_protocol": "zk-STARK",
-            "public_inputs_hash": "mock",
-            "verifier_key_id": "mock",
-            "cryptographic_blob": "mock",
-        },
-        "agent_attestation": {
-            "training_lineage_hash": "mock",
-            "developer_signature": "mock",
-            "capability_merkle_root": "mock",
-            "credential_presentations": [],
-        },
-    }  # pragma: no cover
-    manifest = {
-        "tool_name": tool_name,
-        "description": "Mock",
-        "input_schema": {},
-        "side_effects": {"is_idempotent": True, "mutates_state": False},
-        "permissions": {"network_access": False, "file_system_mutation_forbidden": True},
-    }  # pragma: no cover
-
     # For this patch, we run the async execution in a new isolated event loop
-    return asyncio.run(strategy.execute(intent, manifest, None))  # pragma: no cover
+    return asyncio.run(strategy.execute(intent_payload, manifest_payload, None))  # pragma: no cover
 
     return {"status": "success"}
 
@@ -467,13 +441,12 @@ class BackgroundPollingStrategy:
     async def _background_execute(
         self,
         intent: dict[str, Any],
-        manifest: dict[str, Any],  # noqa: ARG002
+        manifest: dict[str, Any],
         sandbox_pid: Any,  # noqa: ARG002
         job_id: str,
     ) -> None:
         """Executes the task in the background and pushes the final observation to the broker."""
         loop = asyncio.get_running_loop()
-        tool_name = intent.get("tool_name", "")
 
         try:
             # FIX: Offload CPU-bound task to an isolated OS process to protect the daemon's event loop
@@ -481,8 +454,8 @@ class BackgroundPollingStrategy:
                 result = await loop.run_in_executor(
                     pool,
                     _run_sync_execution,
-                    tool_name,
-                    intent.get("parameters", {}),
+                    intent,
+                    manifest,
                 )
             # Wrap the successful result in an ObservationEvent
             observation = {
