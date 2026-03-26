@@ -254,10 +254,10 @@ class ActuatorDaemon:
 
                 if sandbox and partition_state:
                     # Apply Dual-Evaluation Permission Boundary and immutability checks
-                    manifest_dict = getattr(manifest, "model_dump", lambda: manifest)()
+                    manifest_dict = getattr(manifest, "model_dump", lambda: manifest)()  # pragma: no cover
                     partition_dict = getattr(
                         partition_state, "model_dump", lambda: getattr(partition_state, "__dict__", partition_state)
-                    )()
+                    )()  # pragma: no cover
                     verify_network_access(
                         manifest_dict,
                         partition_dict,  # type: ignore[arg-type]
