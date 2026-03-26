@@ -15,11 +15,6 @@ import subprocess
 from typing import Any, Protocol
 
 import httpx
-from coreason_manifest.spec.ontology import (
-    EphemeralNamespacePartitionState,
-    SecureSubSessionState,
-    ToolManifest,
-)
 
 from coreason_actuator.utils.logger import logger
 
@@ -70,7 +65,7 @@ class HashiCorpVault:
 class SandboxProviderProtocol(Protocol):
     """Abstract implementations MUST strictly map to the coreason-manifest bounds."""
 
-    def provision(self, partition_state: Any) -> None:
+    def provision(self, partition_payload: dict[str, Any]) -> None:
         """Dynamically provisions the execution boundary."""
         ...
 
@@ -104,13 +99,13 @@ class WasmSandboxProvider:
         self.fuel_limit: int = 10000000
         self.bwrap_cmd_array: list[str] = []  # Kept for backwards compatibility in tests if needed
 
-    def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
-        logger.info(f"Provisioning WASM sandbox: {partition_state.partition_id}")
-        self.partition_id = partition_state.partition_id
+    def provision(self, partition_payload: dict[str, Any]) -> None:
+        self.partition_id = partition_payload.get("partition_id")
+        logger.info(f"Provisioning WASM sandbox: {self.partition_id}")
         # Convert MB to Bytes for WASI Engine Configuration
-        self.max_vram_bytes = partition_state.max_vram_mb * 1024 * 1024
+        self.max_vram_bytes = partition_payload.get("max_vram_mb", 512) * 1024 * 1024
         # Assuming an instruction fuel rate per max TTL
-        self.fuel_limit = partition_state.max_ttl_seconds * 100000000
+        self.fuel_limit = partition_payload.get("max_ttl_seconds", 10) * 100000000
 
     def inject_secrets(self, secrets: dict[str, str]) -> None:
         logger.info(f"Injecting {len(secrets)} secrets into WASM tmpfs")
@@ -182,9 +177,9 @@ class RiscvZkvmSandboxProvider:
         self.partition_id: str | None = None
         self.bwrap_cmd_array: list[str] = []
 
-    def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
-        logger.info(f"Provisioning RISC-V ZKVM sandbox: {partition_state.partition_id}")
-        self.partition_id = partition_state.partition_id
+    def provision(self, partition_payload: dict[str, Any]) -> None:
+        self.partition_id = partition_payload.get("partition_id")
+        logger.info(f"Provisioning RISC-V ZKVM sandbox: {self.partition_id}")
         self.bwrap_cmd_array = [
             "bwrap",
             "--unshare-pid",
@@ -271,9 +266,9 @@ class BpfSandboxProvider:
         self.partition_id: str | None = None
         self.bwrap_cmd_array: list[str] = []
 
-    def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
-        logger.info(f"Provisioning BPF sandbox: {partition_state.partition_id}")
-        self.partition_id = partition_state.partition_id
+    def provision(self, partition_payload: dict[str, Any]) -> None:
+        self.partition_id = partition_payload.get("partition_id")
+        logger.info(f"Provisioning BPF sandbox: {self.partition_id}")
         self.bwrap_cmd_array = [
             "bwrap",
             "--unshare-pid",
@@ -364,9 +359,9 @@ class SymbolicSandboxProvider:
         self.partition_id: str | None = None
         self.bwrap_cmd_array: list[str] = []
 
-    def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
-        logger.info(f"Provisioning Symbolic sandbox: {partition_state.partition_id}")
-        self.partition_id = partition_state.partition_id
+    def provision(self, partition_payload: dict[str, Any]) -> None:
+        self.partition_id = partition_payload.get("partition_id")
+        logger.info(f"Provisioning Symbolic sandbox: {self.partition_id}")
         self.bwrap_cmd_array = [
             "bwrap",
             "--unshare-pid",
@@ -464,10 +459,10 @@ class DockerSandboxProvider:
         self.max_vram_mb: int = 512
         self.bwrap_cmd_array: list[str] = []
 
-    def provision(self, partition_state: EphemeralNamespacePartitionState) -> None:
-        logger.info(f"Provisioning Docker sandbox: {partition_state.partition_id}")
-        self.partition_id = partition_state.partition_id
-        self.max_vram_mb = partition_state.max_vram_mb
+    def provision(self, partition_payload: dict[str, Any]) -> None:
+        self.partition_id = partition_payload.get("partition_id")
+        logger.info(f"Provisioning Docker sandbox: {self.partition_id}")
+        self.max_vram_mb = partition_payload.get("max_vram_mb", 512)
         if self.partition_id:
             self.bwrap_cmd_array.extend(["--name", self.partition_id])
 
@@ -541,8 +536,8 @@ class SandboxProviderFactory:
     """Factory to route provisioning to the correct hypervisor adapter."""
 
     @staticmethod
-    def create(partition_state: EphemeralNamespacePartitionState) -> SandboxProviderProtocol:
-        runtime = partition_state.execution_runtime
+    def create(partition_payload: dict[str, Any]) -> SandboxProviderProtocol:
+        runtime = partition_payload.get("execution_runtime")
         if runtime == "docker":  # type: ignore[comparison-overlap]
             return DockerSandboxProvider()
         if runtime == "z3-solver":  # type: ignore[comparison-overlap]
@@ -566,10 +561,10 @@ class StatefulSandboxCache:
 
     async def get_or_create(
         self,
-        session_state: SecureSubSessionState,
-        partition_state: EphemeralNamespacePartitionState,
+        session_payload: dict[str, Any],
+        partition_payload: dict[str, Any],
     ) -> SandboxProviderProtocol:
-        session_id = session_state.session_id
+        session_id = session_payload.get("session_id")
 
         if session_id in self._cache:
             logger.info(f"Warm start: Reusing sandbox for session {session_id}")
@@ -578,8 +573,8 @@ class StatefulSandboxCache:
             return self._cache[session_id]
 
         logger.info(f"Cold start: Provisioning new sandbox for session {session_id}")
-        provider = SandboxProviderFactory.create(partition_state)
-        provider.provision(partition_state)
+        provider = SandboxProviderFactory.create(partition_payload)
+        provider.provision(partition_payload)
 
         if len(self._cache) >= self.max_size:
             # Evict least recently used
@@ -616,7 +611,7 @@ def verify_bytecode_safety(bytecode: bytes, authorized_hashes: list[str]) -> boo
 
 
 def enforce_sandbox_immutability(
-    manifest: ToolManifest,
+    manifest: dict[str, Any],
     provider: SandboxProviderProtocol,
     additional_exemptions: list[str] | None = None,
 ) -> None:
@@ -625,7 +620,8 @@ def enforce_sandbox_immutability(
     root filesystem while explicitly exempting volatile memory paths like /dev/shm
     and specific secret injection mounts.
     """
-    if manifest.permissions.file_system_mutation_forbidden:
+    permissions = manifest.get("permissions", {})
+    if permissions.get("file_system_mutation_forbidden"):
         exemptions = ["/dev/shm", "/run/secrets"]  # noqa: S108
         if additional_exemptions:
             exemptions.extend(additional_exemptions)
@@ -634,8 +630,8 @@ def enforce_sandbox_immutability(
 
 
 def verify_network_access(
-    manifest: ToolManifest,
-    partition_state: EphemeralNamespacePartitionState,
+    manifest: dict[str, Any],
+    partition_payload: dict[str, Any],
     provider: SandboxProviderProtocol | None = None,
 ) -> bool:
     """
@@ -647,8 +643,9 @@ def verify_network_access(
     If access is granted and a provider is passed, it dynamically applies BPF/iptables egress
     rules based on the allowed_domains whitelist.
     """
-    tool_network = manifest.permissions.network_access
-    sandbox_network = partition_state.allow_network_egress
+    permissions = manifest.get("permissions", {})
+    tool_network = permissions.get("network_access")
+    sandbox_network = partition_payload.get("allow_network_egress")
 
     if tool_network and not sandbox_network:
         raise PermissionError(
@@ -659,7 +656,7 @@ def verify_network_access(
     access_granted = bool(tool_network and sandbox_network)
 
     if access_granted and provider is not None:
-        allowed_domains = manifest.permissions.allowed_domains or []
+        allowed_domains = permissions.get("allowed_domains", [])
         provider.apply_network_egress_rules(allowed_domains)
 
     return access_granted
