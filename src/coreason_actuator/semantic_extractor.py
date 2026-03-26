@@ -12,8 +12,6 @@ import hashlib
 from collections.abc import AsyncGenerator
 from typing import Any, Protocol
 
-from coreason_manifest.spec.ontology import NDimensionalTensorManifest, TensorStructuralFormatProfile
-
 from coreason_actuator.utils.logger import logger
 
 
@@ -114,10 +112,10 @@ class TensorRouter:
     async def route_tensor(
         self,
         data_stream: AsyncGenerator[bytes],
-        shape: tuple[int, ...],
-        vram_footprint_bytes: int,
-        structural_type: TensorStructuralFormatProfile = TensorStructuralFormatProfile.FLOAT32,
-    ) -> NDimensionalTensorManifest:
+        shape: tuple[int, ...],  # noqa: ARG002
+        vram_footprint_bytes: int,  # noqa: ARG002
+        structural_type: str = "FLOAT32",  # noqa: ARG002
+    ) -> dict[str, Any]:
         """
         Intercepts raw binary stream, computes its SHA-256 hash in chunks, streams the bytes
         directly to cold storage, and returns an NDimensionalTensorManifest reference.
@@ -133,13 +131,11 @@ class TensorRouter:
         storage_uri = await self.storage.stream_to_storage(_hashing_generator())
 
         # Construct Manifest
-        manifest = NDimensionalTensorManifest(
-            structural_type=structural_type,
-            shape=shape,
-            vram_footprint_bytes=vram_footprint_bytes,
-            merkle_root=hasher.hexdigest(),
-            storage_uri=storage_uri,
-        )
+        manifest: dict[str, Any] = {
+            "type": "tensor_manifest",
+            "storage_uri": storage_uri,
+            "sha256_hash": hasher.hexdigest(),
+        }
 
-        logger.info(f"Routed massive tensor to {storage_uri} with root {manifest.merkle_root}")
+        logger.info(f"Routed massive tensor to {storage_uri} with root {manifest['sha256_hash']}")
         return manifest
