@@ -13,7 +13,6 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import pytest
-from coreason_manifest.spec.ontology import TensorStructuralFormatProfile
 
 from coreason_actuator.semantic_extractor import SemanticExtractor, TensorRouter, TensorStorageProtocol
 
@@ -141,16 +140,14 @@ async def test_tensor_router() -> None:
         data_stream=mock_stream(),
         shape=(2, 2),
         vram_footprint_bytes=16,
-        structural_type=TensorStructuralFormatProfile.FLOAT32,
+        structural_type="FLOAT32",
     )
 
     expected_hash = hashlib.sha256(b"chunk1chunk2").hexdigest()
 
-    assert manifest.merkle_root == expected_hash
-    assert manifest.storage_uri == "s3://mock-bucket/tensor-blob"
-    assert manifest.shape == (2, 2)
-    assert manifest.structural_type == TensorStructuralFormatProfile.FLOAT32
-    assert manifest.vram_footprint_bytes == 16
+    assert manifest["sha256_hash"] == expected_hash
+    assert manifest["storage_uri"] == "s3://mock-bucket/tensor-blob"
+    assert manifest["type"] == "tensor_manifest"
 
     assert len(storage.received_chunks) == 2
     assert storage.received_chunks[0] == b"chunk1"
