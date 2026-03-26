@@ -230,7 +230,7 @@ class ActuatorDaemon:
                     partition_data = partitions_data[0]
                     partition = types.SimpleNamespace(**partition_data)
                     sandbox = SandboxProviderFactory.create(partition)  # type: ignore[arg-type]
-                    sandbox.provision(partition)
+                    sandbox.provision(partition.__dict__)
                     self.active_sandboxes[event_id] = sandbox
 
             # Extract session state from the state_hydration attached to intent dictionary
@@ -403,7 +403,7 @@ class ActuatorDaemon:
                 partition_data = partitions_data[0]
                 partition = types.SimpleNamespace(**partition_data)
                 sandbox = SandboxProviderFactory.create(partition)  # type: ignore[arg-type]
-                sandbox.provision(partition)
+                sandbox.provision(partition.__dict__)
                 if request_id:
                     self.active_sandboxes[str(request_id)] = sandbox
 

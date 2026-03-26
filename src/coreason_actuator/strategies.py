@@ -92,7 +92,7 @@ class NativeRegistryProtocol(Protocol):
 class MCPServerRegistryProtocol(Protocol):
     """Protocol for discovering MCPServerManifest definitions."""
 
-    async def get_server_manifest(self, tool_name: str) -> MCPServerManifest | None:
+    async def get_server_manifest(self, tool_name: str) -> Any | None:
         """Retrieves the server manifest for dynamically discovered tools."""
         ...
 
@@ -100,7 +100,7 @@ class MCPServerRegistryProtocol(Protocol):
 class MCPTransportProtocol(Protocol):
     """Protocol abstracting the MCP transport layer (stdio, sse, http)."""
 
-    async def dispatch(self, server_manifest: MCPServerManifest, packet: dict[str, Any]) -> Any:
+    async def dispatch(self, server_manifest: Any, packet: dict[str, Any]) -> Any:
         """Dispatches a JSON-RPC packet over the appropriate transport layer."""
         ...
 

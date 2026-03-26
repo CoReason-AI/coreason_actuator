@@ -564,7 +564,7 @@ class StatefulSandboxCache:
         session_payload: dict[str, Any],
         partition_payload: dict[str, Any],
     ) -> SandboxProviderProtocol:
-        session_id = session_payload.get("session_id")
+        session_id = str(session_payload.get("session_id"))
 
         if session_id in self._cache:
             logger.info(f"Warm start: Reusing sandbox for session {session_id}")
