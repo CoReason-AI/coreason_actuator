@@ -161,7 +161,7 @@ async def test_daemon_successful_dispatch() -> None:
     validator = MockValidator(should_fail=False)
     policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy()
-    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    registry = MockRegistry({"test_tool": create_mock_manifest().model_dump()})
 
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
@@ -246,7 +246,7 @@ async def test_daemon_execution_success() -> None:
     validator = MockValidator(should_fail=False)
     policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(result={"some": "data"})
-    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    registry = MockRegistry({"test_tool": create_mock_manifest().model_dump()})
 
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
@@ -271,7 +271,7 @@ async def test_daemon_execution_crash() -> None:
     validator = MockValidator(should_fail=False)
     policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(should_crash=True)
-    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    registry = MockRegistry({"test_tool": create_mock_manifest().model_dump()})
 
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
@@ -486,7 +486,7 @@ async def test_daemon_execution_success_with_scrubbing() -> None:
             "other": 456,
         }
     )
-    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    registry = MockRegistry({"test_tool": create_mock_manifest().model_dump()})
 
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
@@ -527,7 +527,7 @@ async def test_daemon_execution_crash_with_scrubbing() -> None:
             raise RuntimeError("Failed because of super_secret_token in memory")
 
     strategy = CrasherStrategy()
-    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    registry = MockRegistry({"test_tool": create_mock_manifest().model_dump()})
 
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
@@ -556,7 +556,7 @@ async def test_daemon_vault_unsealing_and_injection() -> None:
     validator = MockValidator(should_fail=False)
     policy = {"max_queue_depth": 10, "max_concurrent_tool_invocations": 10}
     strategy = MockExecutionStrategy(result={"some": "data"})
-    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    registry = MockRegistry({"test_tool": create_mock_manifest().model_dump()})
     vault = MockVault({"oauth2:github": "secret_token"})
 
     class MockSandbox:
@@ -618,7 +618,7 @@ async def test_daemon_semantic_truncation_routing() -> None:
     }
 
     strategy = MockExecutionStrategy(result=truncated_result)
-    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    registry = MockRegistry({"test_tool": create_mock_manifest().model_dump()})
 
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry)  # type: ignore
 
@@ -656,7 +656,7 @@ async def test_daemon_semantic_extractor_integration() -> None:
             "small_data": [1, 2, 3],
         }
     )
-    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    registry = MockRegistry({"test_tool": create_mock_manifest().model_dump()})
     semantic_extractor = SemanticExtractor(max_array_length=10)
 
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry, semantic_extractor=semantic_extractor)  # type: ignore
@@ -702,7 +702,7 @@ async def test_daemon_semantic_extractor_native_combination() -> None:
     }
 
     strategy = MockExecutionStrategy(result=truncated_result)
-    registry = MockRegistry({"test_tool": create_mock_manifest()})
+    registry = MockRegistry({"test_tool": create_mock_manifest().model_dump()})
     semantic_extractor = SemanticExtractor(max_array_length=10)
 
     daemon = ActuatorDaemon(broker, validator, policy, strategy, registry, semantic_extractor=semantic_extractor)  # type: ignore

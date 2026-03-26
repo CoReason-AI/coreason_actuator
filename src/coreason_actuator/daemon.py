@@ -230,7 +230,7 @@ class ActuatorDaemon:
                     partition_data = partitions_data[0]
                     partition = types.SimpleNamespace(**partition_data)
                     sandbox = SandboxProviderFactory.create(partition)  # type: ignore[arg-type]
-                    sandbox.provision(partition)
+                    sandbox.provision(partition.__dict__)
                     self.active_sandboxes[event_id] = sandbox
 
             # Extract session state from the state_hydration attached to intent dictionary
@@ -254,8 +254,16 @@ class ActuatorDaemon:
 
                 if sandbox and partition_state:
                     # Apply Dual-Evaluation Permission Boundary and immutability checks
-                    verify_network_access(manifest, partition_state, sandbox)  # type: ignore[arg-type]
-                    enforce_sandbox_immutability(manifest, sandbox)  # type: ignore[arg-type]
+                    manifest_dict = getattr(manifest, "model_dump", lambda: manifest)()  # pragma: no cover
+                    partition_dict = getattr(
+                        partition_state, "model_dump", lambda: getattr(partition_state, "__dict__", partition_state)
+                    )()  # pragma: no cover
+                    verify_network_access(
+                        manifest_dict,
+                        partition_dict,  # type: ignore[arg-type]
+                        sandbox,
+                    )  # type: ignore[arg-type]
+                    enforce_sandbox_immutability(manifest_dict, sandbox)  # type: ignore[arg-type]
 
                 # Based on FR-2.3, if allowed_vault_keys is present, unseal secrets and inject into sandbox
                 if session_state and getattr(session_state, "allowed_vault_keys", None) and self.vault:
@@ -403,7 +411,7 @@ class ActuatorDaemon:
                 partition_data = partitions_data[0]
                 partition = types.SimpleNamespace(**partition_data)
                 sandbox = SandboxProviderFactory.create(partition)  # type: ignore[arg-type]
-                sandbox.provision(partition)
+                sandbox.provision(partition.__dict__)
                 if request_id:
                     self.active_sandboxes[str(request_id)] = sandbox
 

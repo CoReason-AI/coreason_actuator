@@ -18,13 +18,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any, Protocol
 
-from coreason_manifest.spec.ontology import (
-    BrowserDOMState,
-    MCPServerManifest,
-    ObservationEvent,
-    ToolInvocationEvent,
-    ToolManifest,
-)
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from coreason_actuator.interfaces import IPCBrokerProtocol, KinematicBrowserProtocol
@@ -99,7 +92,7 @@ class NativeRegistryProtocol(Protocol):
 class MCPServerRegistryProtocol(Protocol):
     """Protocol for discovering MCPServerManifest definitions."""
 
-    async def get_server_manifest(self, tool_name: str) -> MCPServerManifest | None:
+    async def get_server_manifest(self, tool_name: str) -> Any | None:
         """Retrieves the server manifest for dynamically discovered tools."""
         ...
 
@@ -107,7 +100,7 @@ class MCPServerRegistryProtocol(Protocol):
 class MCPTransportProtocol(Protocol):
     """Protocol abstracting the MCP transport layer (stdio, sse, http)."""
 
-    async def dispatch(self, server_manifest: MCPServerManifest, packet: dict[str, Any]) -> Any:
+    async def dispatch(self, server_manifest: Any, packet: dict[str, Any]) -> Any:
         """Dispatches a JSON-RPC packet over the appropriate transport layer."""
         ...
 
@@ -119,7 +112,7 @@ class NativeExecutionStrategy:
         self.registry = registry
         self.lock_manager = lock_manager
 
-    async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
+    async def execute(self, intent: dict[str, Any], manifest: dict[str, Any], sandbox_pid: Any) -> Any:
         """
         Executes the native python function.
 
@@ -128,9 +121,10 @@ class NativeExecutionStrategy:
         Handles state mutations by acquiring distributed locks.
         """
         _ = sandbox_pid  # Unused for native executions, but required by protocol
-        tool_callable = await self.registry.get_callable(intent.tool_name)
+        tool_name = intent.get("tool_name", "")
+        tool_callable = await self.registry.get_callable(tool_name)
         if not tool_callable:
-            raise ValueError(f"Tool {intent.tool_name} not found in native registry.")
+            raise ValueError(f"Tool {tool_name} not found in native registry.")
 
         # Crucial Security Gate: AST Safety Verification
         # If the intent parameters contain any dynamic python payload string (e.g. for eval/exec)
@@ -141,7 +135,7 @@ class NativeExecutionStrategy:
         # the Actuator MUST pass the payload through verify_ast_safety()"
 
         # We check all string values in the parameters for AST safety.
-        params = intent.parameters or {}
+        params = intent.get("parameters", {})
         for key, value in params.items():
             # We attempt to parse and verify it as an AST
             if isinstance(value, str):
@@ -173,11 +167,11 @@ class NativeExecutionStrategy:
                     }
 
         # Idempotency Rules
-        side_effects = getattr(manifest, "side_effects", None)
+        side_effects = manifest.get("side_effects", {})
 
         # Determine if we need to lock
-        mutates_state = getattr(side_effects, "mutates_state", False) if side_effects else False
-        is_idempotent = getattr(side_effects, "is_idempotent", False) if side_effects else False
+        mutates_state = side_effects.get("mutates_state", False)
+        is_idempotent = side_effects.get("is_idempotent", False)
 
         async def _do_execute() -> Any:
             # The actual execution of the callable
@@ -191,9 +185,11 @@ class NativeExecutionStrategy:
         if mutates_state:
             payload_hash = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
             # Lock key MUST be formulated using specific cryptographic nonce of execution
-            lock_key = f"lock:{intent.tool_name}:{payload_hash}:{intent.event_id}"
+            event_id = intent.get("event_id", "")
+            lock_key = f"lock:{tool_name}:{payload_hash}:{event_id}"
             # Lock TTL MUST be mathematically bound to ExecutionSLA.max_execution_time_ms
-            ttl = manifest.sla.max_execution_time_ms if manifest.sla else None
+            sla = manifest.get("sla", {})
+            ttl = sla.get("max_execution_time_ms")
 
             logger.info(f"Acquiring exclusive execution lock for {lock_key} with ttl {ttl}ms")
             async with self.lock_manager.acquire(lock_key, ttl=ttl):
@@ -226,7 +222,7 @@ class MCPClientStrategy:
         self.registry = registry
         self.transport = transport
 
-    async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
+    async def execute(self, intent: dict[str, Any], manifest: dict[str, Any], sandbox_pid: Any) -> Any:
         """
         Executes the MCP protocol dispatch.
 
@@ -235,16 +231,17 @@ class MCPClientStrategy:
         _ = manifest  # Used for permissions/SLA in the orchestrator or broader context
         _ = sandbox_pid  # MCP connections might originate from the actuator daemon directly
 
-        server_manifest = await self.registry.get_server_manifest(intent.tool_name)
+        tool_name = intent.get("tool_name", "")
+        server_manifest = await self.registry.get_server_manifest(tool_name)
         if not server_manifest:
-            raise ValueError(f"MCPServerManifest not found for tool: {intent.tool_name}")
+            raise ValueError(f"MCPServerManifest not found for tool: {tool_name}")
 
         # Construct strictly compliant JSON-RPC 2.0 packet
         packet = {
             "jsonrpc": "2.0",
-            "id": intent.event_id,
-            "method": intent.tool_name,
-            "params": intent.parameters or {},
+            "id": intent.get("event_id"),
+            "method": tool_name,
+            "params": intent.get("parameters", {}),
         }
 
         # If the transport type is stdio, spawn the process via asyncio.subprocess
@@ -300,7 +297,7 @@ class KinematicExecutionStrategy:
         self.browser = browser
         self.tensor_storage = tensor_storage
 
-    async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
+    async def execute(self, intent: dict[str, Any], manifest: dict[str, Any], sandbox_pid: Any) -> Any:
         """
         Executes the kinematic interaction using purely atomic locators.
 
@@ -310,7 +307,7 @@ class KinematicExecutionStrategy:
         _ = manifest
         _ = sandbox_pid
 
-        params = intent.parameters or {}
+        params = intent.get("parameters", {})
         x = params.get("x")
         y = params.get("y")
         expected_visual_concept = params.get("expected_visual_concept")
@@ -370,25 +367,18 @@ class KinematicExecutionStrategy:
 
         # The accessibility_tree_hash is populated with a static value indicating it's deprecated/bypassed
         # in favor of pure Atomic Locators per architectural constraints.
-        return BrowserDOMState(
-            current_url=current_url,
-            viewport_size=viewport_size,
-            dom_hash=dom_hash,
-            accessibility_tree_hash="a" * 64,
-            screenshot_cid=screenshot_cid,
-        )
+        return {
+            "current_url": current_url,
+            "viewport_size": viewport_size,
+            "dom_hash": dom_hash,
+            "accessibility_tree_hash": "a" * 64,
+            "screenshot_cid": screenshot_cid,
+        }
 
 
 def _run_sync_execution(tool_name: str, parameters: dict[str, Any]) -> Any:  # pragma: no cover
     """Helper to bridge async registry inside a synchronous ProcessPool"""
     import asyncio  # pragma: no cover
-
-    from coreason_manifest.spec.ontology import (  # pragma: no cover
-        AgentAttestationReceipt,
-        PermissionBoundaryPolicy,
-        SideEffectProfile,
-        ZeroKnowledgeReceipt,
-    )
 
     from coreason_actuator.main import ActionSpaceRegistry, AsyncLockManager  # pragma: no cover
     from coreason_actuator.strategies import NativeExecutionStrategy  # pragma: no cover
@@ -398,33 +388,31 @@ def _run_sync_execution(tool_name: str, parameters: dict[str, Any]) -> Any:  # p
     lock_manager = AsyncLockManager()  # pragma: no cover
     strategy = NativeExecutionStrategy(registry=registry, lock_manager=lock_manager)  # pragma: no cover
 
-    intent = ToolInvocationEvent.model_construct(  # pragma: no cover
-        event_id="0",
-        timestamp=0.0,
-        tool_name=tool_name,
-        parameters=parameters,  # pragma: no cover
-        zk_proof=ZeroKnowledgeReceipt.model_construct(  # pragma: no cover
-            proof_protocol="zk-STARK",
-            public_inputs_hash="mock",
-            verifier_key_id="mock",
-            cryptographic_blob="mock",
-        ),  # pragma: no cover
-        agent_attestation=AgentAttestationReceipt.model_construct(  # pragma: no cover
-            training_lineage_hash="mock",
-            developer_signature="mock",
-            capability_merkle_root="mock",
-            credential_presentations=[],
-        ),  # pragma: no cover
-    )  # pragma: no cover
-    manifest = ToolManifest.model_construct(
-        tool_name=tool_name,
-        description="Mock",
-        input_schema={},
-        side_effects=SideEffectProfile.model_construct(is_idempotent=True, mutates_state=False),  # pragma: no cover
-        permissions=PermissionBoundaryPolicy.model_construct(
-            network_access=False, file_system_mutation_forbidden=True
-        ),  # pragma: no cover
-    )  # pragma: no cover
+    intent = {
+        "event_id": "0",
+        "timestamp": 0.0,
+        "tool_name": tool_name,
+        "parameters": parameters,
+        "zk_proof": {
+            "proof_protocol": "zk-STARK",
+            "public_inputs_hash": "mock",
+            "verifier_key_id": "mock",
+            "cryptographic_blob": "mock",
+        },
+        "agent_attestation": {
+            "training_lineage_hash": "mock",
+            "developer_signature": "mock",
+            "capability_merkle_root": "mock",
+            "credential_presentations": [],
+        },
+    }  # pragma: no cover
+    manifest = {
+        "tool_name": tool_name,
+        "description": "Mock",
+        "input_schema": {},
+        "side_effects": {"is_idempotent": True, "mutates_state": False},
+        "permissions": {"network_access": False, "file_system_mutation_forbidden": True},
+    }  # pragma: no cover
 
     # For this patch, we run the async execution in a new isolated event loop
     return asyncio.run(strategy.execute(intent, manifest, None))  # pragma: no cover
@@ -443,15 +431,18 @@ class BackgroundPollingStrategy:
         self.execution_strategy = execution_strategy
         self.broker = broker
 
-    async def execute(self, intent: Any, manifest: Any, sandbox_pid: Any) -> Any:
-        sla = manifest.sla
-        max_time_ms = sla.max_execution_time_ms if sla else None
+    async def execute(self, intent: dict[str, Any], manifest: dict[str, Any], sandbox_pid: Any) -> Any:
+        sla = manifest.get("sla", {})
+        max_time_ms = (
+            sla.get("max_execution_time_ms") if hasattr(sla, "get") else getattr(sla, "max_execution_time_ms", None)
+        )
+        tool_name = intent.get("tool_name", "")
 
         if max_time_ms is None or max_time_ms < 30000:
-            logger.info(f"Executing tool {intent.tool_name} synchronously (SLA: {max_time_ms}ms)")
+            logger.info(f"Executing tool {tool_name} synchronously (SLA: {max_time_ms}ms)")
             return await self.execution_strategy.execute(intent, manifest, sandbox_pid)
 
-        logger.info(f"Executing tool {intent.tool_name} asynchronously (SLA: {max_time_ms}ms)")
+        logger.info(f"Executing tool {tool_name} asynchronously (SLA: {max_time_ms}ms)")
         job_id = str(uuid.uuid4())
 
         # Spawn the background task
@@ -466,23 +457,24 @@ class BackgroundPollingStrategy:
         task.add_done_callback(self._background_tasks.discard)
 
         # Return a strictly typed ObservationEvent indicating pending execution
-        return ObservationEvent(
-            event_id=str(uuid.uuid4()),
-            timestamp=time.time(),
-            type="observation",
-            payload={"status": "pending_async_execution", "job_id": job_id},
-            triggering_invocation_id=intent.event_id,
-        )
+        return {
+            "event_id": str(uuid.uuid4()),
+            "timestamp": time.time(),
+            "type": "observation",
+            "payload": {"status": "pending_async_execution", "job_id": job_id},
+            "triggering_invocation_id": intent.get("event_id"),
+        }
 
     async def _background_execute(
         self,
-        intent: Any,
-        manifest: Any,  # noqa: ARG002
+        intent: dict[str, Any],
+        manifest: dict[str, Any],  # noqa: ARG002
         sandbox_pid: Any,  # noqa: ARG002
         job_id: str,
     ) -> None:
         """Executes the task in the background and pushes the final observation to the broker."""
         loop = asyncio.get_running_loop()
+        tool_name = intent.get("tool_name", "")
 
         try:
             # FIX: Offload CPU-bound task to an isolated OS process to protect the daemon's event loop
@@ -490,33 +482,33 @@ class BackgroundPollingStrategy:
                 result = await loop.run_in_executor(
                     pool,
                     _run_sync_execution,
-                    intent.tool_name,
-                    intent.parameters or {},
+                    tool_name,
+                    intent.get("parameters", {}),
                 )
             # Wrap the successful result in an ObservationEvent
-            observation = ObservationEvent(
-                event_id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                type="observation",
-                payload={"status": "completed", "job_id": job_id, "result": result},
-                triggering_invocation_id=intent.event_id,
-            )
+            observation = {
+                "event_id": str(uuid.uuid4()),
+                "timestamp": time.time(),
+                "type": "observation",
+                "payload": {"status": "completed", "job_id": job_id, "result": result},
+                "triggering_invocation_id": intent.get("event_id"),
+            }
             logger.info(f"Background execution completed for job {job_id}")
         except Exception as e:
             # Handle the error and wrap in an ObservationEvent
-            observation = ObservationEvent(
-                event_id=str(uuid.uuid4()),
-                timestamp=time.time(),
-                type="observation",
-                payload={
+            observation = {
+                "event_id": str(uuid.uuid4()),
+                "timestamp": time.time(),
+                "type": "observation",
+                "payload": {
                     "status": "fatal_crash",
                     "job_id": job_id,
                     "error_type": type(e).__name__,
                     "error_message": str(e),
                 },
-                triggering_invocation_id=intent.event_id,
-            )
+                "triggering_invocation_id": intent.get("event_id"),
+            }
             logger.error(f"Background execution failed for job {job_id}: {e}")
 
         # Push the final observation back to the IPC broker
-        await self.broker.push(observation.model_dump())
+        await self.broker.push(observation)

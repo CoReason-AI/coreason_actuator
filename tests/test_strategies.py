@@ -239,7 +239,11 @@ async def test_native_execution_strategy_success() -> None:
     )
     manifest = create_mock_manifest()
 
-    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+    result = await strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(),
+        getattr(manifest, "model_dump", lambda: manifest)(),
+        sandbox_pid=None,
+    )
 
     assert result == "success"
     mock_callable.assert_called_once_with(arg1="safe_value")
@@ -262,7 +266,11 @@ async def test_native_execution_strategy_missing_tool() -> None:
     manifest = create_mock_manifest()
 
     with pytest.raises(ValueError, match="Tool missing_tool not found in native registry"):
-        await strategy.execute(intent, manifest, sandbox_pid=None)
+        await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid=None,
+        )
 
 
 @pytest.mark.asyncio
@@ -286,7 +294,11 @@ async def test_native_execution_strategy_ast_safety_failure() -> None:
     )
     manifest = create_mock_manifest()
 
-    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+    result = await strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(),
+        getattr(manifest, "model_dump", lambda: manifest)(),
+        sandbox_pid=None,
+    )
     assert result.get("execution_status") == "fatal_crash"
     assert "Kinetic execution bleed detected" in result.get(
         "traceback"
@@ -312,7 +324,11 @@ async def test_native_execution_strategy_ast_safety_explicit_false() -> None:
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr("coreason_actuator.strategies.verify_ast_safety", MagicMock(return_value=False))
-        result = await strategy.execute(intent, manifest, sandbox_pid=None)
+        result = await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid=None,
+        )
         assert result.get("execution_status") == "fatal_crash"
         assert "AST safety verification failed for parameter 'code'" in result.get("traceback")
 
@@ -336,7 +352,11 @@ async def test_native_execution_strategy_ast_safety_unknown_error() -> None:
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr("coreason_actuator.strategies.verify_ast_safety", MagicMock(side_effect=Exception("Unknown Error")))
-        result = await strategy.execute(intent, manifest, sandbox_pid=None)
+        result = await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid=None,
+        )
         assert result.get("execution_status") == "fatal_crash"
         assert "Unknown Error" in result.get("traceback")
 
@@ -361,7 +381,11 @@ async def test_native_execution_strategy_ast_safety_success_with_string() -> Non
     )
     manifest = create_mock_manifest()
 
-    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+    result = await strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(),
+        getattr(manifest, "model_dump", lambda: manifest)(),
+        sandbox_pid=None,
+    )
     assert result == "success"
     mock_callable.assert_called_once_with(code=safe_payload)
 
@@ -402,7 +426,11 @@ async def test_native_execution_strategy_idempotency_retry() -> None:
 
     with pytest.MonkeyPatch.context() as m:
         m.setattr(tenacity.nap, "sleep", MagicMock())
-        result = await strategy.execute(intent, manifest, sandbox_pid=None)
+        result = await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid=None,
+        )
 
     assert result == "success_on_retry"
     assert mock_callable.call_count == 2
@@ -439,7 +467,11 @@ async def test_native_execution_strategy_idempotency_no_retry_on_other_errors() 
     with pytest.MonkeyPatch.context() as m:
         m.setattr(tenacity.nap, "sleep", MagicMock())
         with pytest.raises(ValueError, match="Some other error"):
-            await strategy.execute(intent, manifest, sandbox_pid=None)
+            await strategy.execute(
+                getattr(intent, "model_dump", lambda: intent)(),
+                getattr(manifest, "model_dump", lambda: manifest)(),
+                sandbox_pid=None,
+            )
 
     # Because ValueError is not in the retry_if_exception_type list, it should only be called once
     assert mock_callable.call_count == 1
@@ -464,7 +496,11 @@ async def test_native_execution_strategy_state_mutation_locking() -> None:
     )
     manifest = create_mock_manifest(mutates_state=True)
 
-    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+    result = await strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(),
+        getattr(manifest, "model_dump", lambda: manifest)(),
+        sandbox_pid=None,
+    )
 
     assert result == "mutated"
     mock_callable.assert_called_once_with(**params)
@@ -510,7 +546,11 @@ async def test_native_execution_strategy_fuzzing_params(text_param: str) -> None
     # To avoid flakiness, we patch verify_ast_safety to return True.
     with pytest.MonkeyPatch.context() as m:
         m.setattr("coreason_actuator.strategies.verify_ast_safety", MagicMock(return_value=True))
-        result = await strategy.execute(intent, manifest, sandbox_pid=None)
+        result = await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid=None,
+        )
         assert result == "success"
         mock_callable.assert_called_once_with(fuzz=text_param)
 
@@ -534,7 +574,11 @@ async def test_native_execution_strategy_ast_safety_allows_plain_strings() -> No
     )
     manifest = create_mock_manifest()
 
-    result = await strategy.execute(intent, manifest, sandbox_pid=None)
+    result = await strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(),
+        getattr(manifest, "model_dump", lambda: manifest)(),
+        sandbox_pid=None,
+    )
     assert result == "success"
     mock_callable.assert_called_once_with(description=plain_string_payload)
 
@@ -580,7 +624,11 @@ async def test_mcp_client_strategy_success() -> None:
 
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
         mock_exec.return_value = mock_proc
-        result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        result = await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
     assert result == {"jsonrpc": "2.0", "id": "test_event_id_123", "result": "mock_response"}
     assert mock_exec.call_count == 1
@@ -629,7 +677,11 @@ async def test_mcp_client_strategy_stdio_spawn() -> None:
 
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
         mock_exec.return_value = mock_proc
-        result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        result = await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
     assert mock_exec.call_count == 1
     assert mock_exec.call_args[0][0] == "python"
@@ -672,7 +724,11 @@ async def test_mcp_client_strategy_stdio_spawn_no_command() -> None:
     manifest = create_mock_manifest()
 
     with pytest.raises(ValueError, match=r"Stdio transport requires a 'command'\."):
-        await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
 
 @pytest.mark.asyncio
@@ -709,7 +765,11 @@ async def test_mcp_client_strategy_stdio_spawn_no_pipes() -> None:
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
         mock_exec.return_value = mock_proc
         with pytest.raises(RuntimeError, match=r"Failed to open subprocess pipes\."):
-            await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+            await strategy.execute(
+                getattr(intent, "model_dump", lambda: intent)(),
+                getattr(manifest, "model_dump", lambda: manifest)(),
+                sandbox_pid="mock_pid",
+            )
 
 
 @pytest.mark.asyncio
@@ -753,7 +813,11 @@ async def test_mcp_client_strategy_stdio_spawn_no_response() -> None:
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
         mock_exec.return_value = mock_proc
         with pytest.raises(RuntimeError, match=r"MCP server closed stdout without a response\."):
-            await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+            await strategy.execute(
+                getattr(intent, "model_dump", lambda: intent)(),
+                getattr(manifest, "model_dump", lambda: manifest)(),
+                sandbox_pid="mock_pid",
+            )
 
 
 @pytest.mark.asyncio
@@ -797,7 +861,11 @@ async def test_mcp_client_strategy_stdio_spawn_invalid_json() -> None:
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
         mock_exec.return_value = mock_proc
         with pytest.raises(ValueError, match="Invalid JSON response from MCP server: invalid_json"):
-            await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+            await strategy.execute(
+                getattr(intent, "model_dump", lambda: intent)(),
+                getattr(manifest, "model_dump", lambda: manifest)(),
+                sandbox_pid="mock_pid",
+            )
 
 
 @pytest.mark.asyncio
@@ -825,7 +893,11 @@ async def test_mcp_client_strategy_non_stdio() -> None:
     )
     manifest = create_mock_manifest()
 
-    result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+    result = await strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(),
+        getattr(manifest, "model_dump", lambda: manifest)(),
+        sandbox_pid="mock_pid",
+    )
 
     assert result == "mock_response"
     assert len(transport.dispatched_packets) == 1
@@ -848,7 +920,11 @@ async def test_mcp_client_strategy_missing_tool() -> None:
     manifest = create_mock_manifest()
 
     with pytest.raises(ValueError, match="MCPServerManifest not found for tool: missing_tool"):
-        await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
     assert len(transport.dispatched_packets) == 0
 
@@ -894,7 +970,11 @@ async def test_mcp_client_strategy_none_parameters() -> None:
 
     with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
         mock_exec.return_value = mock_proc
-        result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        result = await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
     assert result == {"jsonrpc": "2.0", "id": "test_event_id_456", "result": "mock_response"}
     assert mock_exec.call_count == 1
@@ -965,14 +1045,17 @@ async def test_kinematic_strategy_click_success() -> None:
     )
     manifest = create_mock_manifest()
 
-    result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+    result = await strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(),
+        getattr(manifest, "model_dump", lambda: manifest)(),
+        sandbox_pid="mock_pid",
+    )
 
-    assert result.type == "browser"
-    assert result.current_url == "https://example.com/test"
-    assert result.viewport_size == (1920, 1080)
-    assert result.dom_hash == "a" * 64
-    assert result.accessibility_tree_hash == "a" * 64
-    assert result.screenshot_cid == "ipfs://mock_screenshot_cid_123"
+    assert result["current_url"] == "https://example.com/test"
+    assert result["viewport_size"] == (1920, 1080)
+    assert result["dom_hash"] == "a" * 64
+    assert result["accessibility_tree_hash"] == "a" * 64
+    assert result["screenshot_cid"] == "ipfs://mock_screenshot_cid_123"
 
     assert len(browser.clicked_coords) == 1
     assert browser.clicked_coords[0] == (100.0, 200.0, "Submit Button", 200)
@@ -1002,14 +1085,17 @@ async def test_kinematic_strategy_type_text_success() -> None:
     )
     manifest = create_mock_manifest()
 
-    result = await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+    result = await strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(),
+        getattr(manifest, "model_dump", lambda: manifest)(),
+        sandbox_pid="mock_pid",
+    )
 
-    assert result.type == "browser"
-    assert result.current_url == "https://example.com/test"
-    assert result.viewport_size == (1920, 1080)
-    assert result.dom_hash == "a" * 64
-    assert result.accessibility_tree_hash == "a" * 64
-    assert result.screenshot_cid == "ipfs://mock_screenshot_cid_123"
+    assert result["current_url"] == "https://example.com/test"
+    assert result["viewport_size"] == (1920, 1080)
+    assert result["dom_hash"] == "a" * 64
+    assert result["accessibility_tree_hash"] == "a" * 64
+    assert result["screenshot_cid"] == "ipfs://mock_screenshot_cid_123"
 
     assert len(browser.typed_texts) == 1
     assert browser.typed_texts[0] == (100.0, 200.0, "testuser", "Username Field", 100)
@@ -1038,7 +1124,11 @@ async def test_kinematic_strategy_verification_failure() -> None:
     manifest = create_mock_manifest()
 
     with pytest.raises(RuntimeError, match="Visual verification failed: Expected concept 'Submit Button' not found"):
-        await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
     assert len(browser.clicked_coords) == 0
 
@@ -1062,7 +1152,11 @@ async def test_kinematic_strategy_missing_params() -> None:
         ValueError,
         match=r"Kinematic interaction requires 'x', 'y', 'expected_visual_concept', and 'action' parameters\.",
     ):
-        await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
 
 @pytest.mark.asyncio
@@ -1086,7 +1180,11 @@ async def test_kinematic_strategy_invalid_coords() -> None:
     manifest = create_mock_manifest()
 
     with pytest.raises(ValueError, match=r"Coordinates 'x', 'y' and 'timeout' must be valid numbers\."):
-        await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
 
 @pytest.mark.asyncio
@@ -1110,7 +1208,11 @@ async def test_kinematic_strategy_missing_text_param() -> None:
     manifest = create_mock_manifest()
 
     with pytest.raises(ValueError, match=r"Kinematic interaction 'type_text' requires a 'text' parameter\."):
-        await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
 
 @pytest.mark.asyncio
@@ -1134,12 +1236,20 @@ async def test_kinematic_strategy_unsupported_action() -> None:
     manifest = create_mock_manifest()
 
     with pytest.raises(ValueError, match="Unsupported kinematic action: drag_and_drop"):
-        await strategy.execute(intent, manifest, sandbox_pid="mock_pid")
+        await strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid="mock_pid",
+        )
 
 
 class MockExecutionStrategy:
     async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
-        _ = (intent, manifest, sandbox_pid)
+        _ = (
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid,
+        )
         return "sync_result"
 
 
@@ -1178,7 +1288,9 @@ async def test_background_polling_sync() -> None:
         agent_attestation=create_mock_attestation(),
     )
 
-    result = await polling_strategy.execute(intent, manifest, "mock_pid")
+    result = await polling_strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(), getattr(manifest, "model_dump", lambda: manifest)(), "mock_pid"
+    )
     assert result == "sync_result"
     assert len(mock_broker.pushed_messages) == 0
 
@@ -1204,21 +1316,31 @@ async def test_background_polling_sync_no_sla() -> None:
         agent_attestation=create_mock_attestation(),
     )
 
-    result = await polling_strategy.execute(intent, manifest, "mock_pid")
+    result = await polling_strategy.execute(
+        getattr(intent, "model_dump", lambda: intent)(), getattr(manifest, "model_dump", lambda: manifest)(), "mock_pid"
+    )
     assert result == "sync_result"
     assert len(mock_broker.pushed_messages) == 0
 
 
 class MockExecutionStrategySlow:
     async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
-        _ = (intent, manifest, sandbox_pid)
+        _ = (
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid,
+        )
         await asyncio.sleep(0.01)
         return "async_result"
 
 
 class MockExecutionStrategyCrash:
     async def execute(self, intent: ToolInvocationEvent, manifest: ToolManifest, sandbox_pid: Any) -> Any:
-        _ = (intent, manifest, sandbox_pid)
+        _ = (
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            sandbox_pid,
+        )
         await asyncio.sleep(0.01)
         raise RuntimeError("Something went wrong!")
 
@@ -1252,15 +1374,23 @@ async def test_background_polling_async() -> None:
     # We patch run_in_executor to avoid spawning a real process and pickling mocks
     async def mock_run_in_executor(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
         # Return whatever the strategy returns
-        return await mock_strategy.execute(intent, manifest, "mock_pid")
+        return await mock_strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            "mock_pid",
+        )
 
     with patch.object(asyncio.get_running_loop(), "run_in_executor", new=mock_run_in_executor):
-        result = await polling_strategy.execute(intent, manifest, "mock_pid")
+        result = await polling_strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            "mock_pid",
+        )
 
-        assert result.type == "observation"
-        assert result.payload["status"] == "pending_async_execution"
-        assert "job_id" in result.payload
-        assert result.triggering_invocation_id == "test_event_id_async"
+        assert result["type"] == "observation"
+        assert result["payload"]["status"] == "pending_async_execution"
+        assert "job_id" in result["payload"]
+        assert result["triggering_invocation_id"] == "test_event_id_async"
 
         if hasattr(polling_strategy, "_background_tasks") and polling_strategy._background_tasks:
             await next(iter(polling_strategy._background_tasks))
@@ -1270,7 +1400,7 @@ async def test_background_polling_async() -> None:
     pushed_msg = mock_broker.pushed_messages[0]
     assert pushed_msg["type"] == "observation"
     assert pushed_msg["payload"]["status"] == "completed"
-    assert pushed_msg["payload"]["job_id"] == result.payload["job_id"]
+    assert pushed_msg["payload"]["job_id"] == result["payload"]["job_id"]
     assert pushed_msg["payload"]["result"] == "async_result"
     assert pushed_msg["triggering_invocation_id"] == "test_event_id_async"
 
@@ -1302,13 +1432,21 @@ async def test_background_polling_async_crash() -> None:
     from unittest.mock import patch
 
     async def mock_run_in_executor(*args: Any, **kwargs: Any) -> Any:  # noqa: ARG001
-        return await mock_strategy.execute(intent, manifest, "mock_pid")
+        return await mock_strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            "mock_pid",
+        )
 
     with patch.object(asyncio.get_running_loop(), "run_in_executor", new=mock_run_in_executor):
-        result = await polling_strategy.execute(intent, manifest, "mock_pid")
+        result = await polling_strategy.execute(
+            getattr(intent, "model_dump", lambda: intent)(),
+            getattr(manifest, "model_dump", lambda: manifest)(),
+            "mock_pid",
+        )
 
-        assert result.type == "observation"
-        assert result.payload["status"] == "pending_async_execution"
+        assert result["type"] == "observation"
+        assert result["payload"]["status"] == "pending_async_execution"
 
         if hasattr(polling_strategy, "_background_tasks") and polling_strategy._background_tasks:
             await next(iter(polling_strategy._background_tasks))
