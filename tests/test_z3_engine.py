@@ -28,7 +28,7 @@ async def test_symbolic_sandbox_provider() -> None:
         max_ttl_seconds=10,
         max_vram_mb=512,
     )
-    provider.provision(part)
+    provider.provision(part.model_dump() if hasattr(part, "model_dump") else part)
     assert "--unshare-net" in provider.bwrap_cmd_array
 
     # Test network and immutability (no-ops or simple lists)
@@ -75,7 +75,7 @@ def test_sandbox_factory_z3() -> None:
         max_ttl_seconds=10,
         max_vram_mb=512,
     )
-    provider = SandboxProviderFactory.create(part)
+    provider = SandboxProviderFactory.create(part.model_dump() if hasattr(part, "model_dump") else part)
     assert isinstance(provider, SymbolicSandboxProvider)
 
 
