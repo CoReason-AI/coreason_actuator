@@ -184,9 +184,8 @@ class NativeExecutionStrategy:
         # Acquire exclusive distributed lock
         if mutates_state:
             payload_hash = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
-            # Lock key MUST be formulated using specific cryptographic nonce of execution
-            event_id = intent.get("event_id", "")
-            lock_key = f"lock:{tool_name}:{payload_hash}:{event_id}"
+            # Lock key MUST be formulated using deterministic variables for mutational idempotency
+            lock_key = f"lock:{tool_name}:{payload_hash}"
             # Lock TTL MUST be mathematically bound to ExecutionSLA.max_execution_time_ms
             sla = manifest.get("sla", {})
             ttl = sla.get("max_execution_time_ms")

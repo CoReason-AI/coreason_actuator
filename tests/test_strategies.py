@@ -507,7 +507,7 @@ async def test_native_execution_strategy_state_mutation_locking() -> None:
 
     # Check lock acquisition
     expected_hash = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
-    expected_lock_key = f"lock:test_tool:{expected_hash}:test_event"
+    expected_lock_key = f"lock:test_tool:{expected_hash}"
 
     # default max_execution_time_ms is 1000 from create_mock_manifest
     expected_ttl = 1000
